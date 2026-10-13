@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     default_sync_query: str = "newer_than:30d"
     max_messages_per_sync: int = 150
     sync_worker_count: int = 8
+    # Gmail enforces per-minute quotas per user, so message fetches get fewer
+    # parallel workers than the (much less rate-limited) AI extraction step.
+    gmail_fetch_workers: int = 4
 
 
 @lru_cache

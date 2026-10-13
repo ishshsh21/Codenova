@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, date, timedelta
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
+from googleapiclient.errors import HttpError
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,7 @@ from app.models import (
 )
 from app.security import get_current_user
 from app.schemas import GmailStatusOut, ScanOut, ScanStartOut, NotificationOut, SyncRequestIn
+from app.gmail.client import GmailRateLimitError, is_rate_limit_error
 from app.gmail.sync import build_gmail_query, run_sync
 
 router = APIRouter(prefix="/api/gmail", tags=["gmail"])
@@ -44,6 +46,15 @@ def _queue_scan(db: Session, user: User, start_date: date | None, end_date: date
     db.commit()
     db.refresh(scan)
     return scan
+
+
+def _scan_error_message(exc: Exception) -> str:
+    """What the Sync page shows for a failed scan: plain words, not Google's raw error dump."""
+    if isinstance(exc, GmailRateLimitError) or (isinstance(exc, HttpError) and is_rate_limit_error(exc)):
+        return "Gmail is limiting how fast we can read your inbox. Wait a minute, then press Run again."
+    if isinstance(exc, HttpError):
+        return f"Gmail returned an error (HTTP {exc.resp.status}). Try again in a few minutes."
+    return str(exc)[:1000]
 
 
 def _run_scan(scan_id: str, user_id: str, start_date: date | None, end_date: date | None):
@@ -110,7 +121,7 @@ def _run_scan(scan_id: str, user_id: str, start_date: date | None, end_date: dat
         if not scan:
             return
         scan.status = "FAILED"
-        scan.error_message = str(exc)[:1000]
+        scan.error_message = _scan_error_message(exc)
         scan.completed_at = datetime.utcnow()
         scan.stage = "FAILED"
         db.add(Notification(

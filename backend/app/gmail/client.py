@@ -5,6 +5,7 @@ fetching, and full-content retrieval only for candidate messages (FR-02).
 """
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -79,16 +80,45 @@ class GmailClient:
         return self._with_retry(lambda: self._service.users().watch(userId="me", body=body).execute())
 
     @staticmethod
-    def _with_retry(fn, retries: int = 3, backoff_seconds: float = 1.0):
-        """FR 5.5: exponential backoff for transient failures."""
-        last_error = None
+    def _with_retry(
+        fn, retries: int = 6, backoff_seconds: float = 2.0, max_backoff_seconds: float = 30.0,
+    ):
+        """FR 5.5: exponential backoff (with jitter) for transient failures.
+
+        Gmail's per-minute quotas are per-minute, so the waits have to be long
+        enough for the window to roll over: 2s, 4s, 8s, 16s, 30s by default.
+        """
         for attempt in range(retries):
             try:
                 return fn()
             except HttpError as e:
-                last_error = e
-                if e.resp.status in (429, 500, 502, 503):
-                    time.sleep(backoff_seconds * (2 ** attempt))
-                    continue
-                raise
-        raise last_error
+                if not _is_retryable(e):
+                    raise
+                if attempt == retries - 1:
+                    if is_rate_limit_error(e):
+                        raise GmailRateLimitError(
+                            "Gmail is rate-limiting this account right now."
+                        ) from e
+                    raise
+                delay = min(backoff_seconds * (2 ** attempt), max_backoff_seconds)
+                time.sleep(delay * random.uniform(0.75, 1.0))
+
+
+class GmailRateLimitError(RuntimeError):
+    """Gmail kept throttling us after every retry; waiting a minute usually fixes it."""
+
+
+def is_rate_limit_error(e: HttpError) -> bool:
+    """Gmail reports quota throttling as 429, or as a 403 whose reason is
+    rateLimitExceeded / userRateLimitExceeded. Other 403s (missing scope,
+    daily limit, disabled API) are real denials and must not be retried."""
+    if e.resp.status == 429:
+        return True
+    if e.resp.status != 403:
+        return False
+    content = e.content.decode("utf-8", "ignore") if isinstance(e.content, bytes) else str(e.content)
+    return "ratelimitexceeded" in content.lower()
+
+
+def _is_retryable(e: HttpError) -> bool:
+    return e.resp.status in (500, 502, 503, 504) or is_rate_limit_error(e)

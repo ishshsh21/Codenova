@@ -92,12 +92,19 @@ def _normalized_email_records_gmail(
 ) -> list[dict]:
     refs = client.list_message_ids(query, limit)
     records = []
-    with ThreadPoolExecutor(max_workers=settings.sync_worker_count) as executor:
+    with ThreadPoolExecutor(max_workers=settings.gmail_fetch_workers) as executor:
         futures = [executor.submit(_fetch_one_email, refresh_token, ref) for ref in refs]
-        for index, future in enumerate(as_completed(futures), start=1):
-            records.append(future.result())
-            if progress_callback:
-                progress_callback("FETCHING_EMAILS", index, len(refs))
+        try:
+            for index, future in enumerate(as_completed(futures), start=1):
+                records.append(future.result())
+                if progress_callback:
+                    progress_callback("FETCHING_EMAILS", index, len(refs))
+        except BaseException:
+            # Once a fetch fails for good, don't let the queued ones keep
+            # hitting a quota we've already exhausted.
+            for future in futures:
+                future.cancel()
+            raise
     return records
 
 
