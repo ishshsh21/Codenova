@@ -30,7 +30,8 @@ class Settings(BaseSettings):
     # Sync defaults
     default_sync_query: str = "newer_than:30d"
     max_messages_per_sync: int = 150
-    sync_worker_count: int = 8
+    sync_worker_count: int = 4
+    gmail_requests_per_second: float = 10.0
 
 
 @lru_cache

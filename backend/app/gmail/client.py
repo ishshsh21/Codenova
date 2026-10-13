@@ -5,6 +5,9 @@ fetching, and full-content retrieval only for candidate messages (FR-02).
 """
 from __future__ import annotations
 
+import json
+import random
+import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -16,6 +19,49 @@ from googleapiclient.errors import HttpError
 from app.config import get_settings
 
 settings = get_settings()
+
+RATE_LIMIT_REASONS = {"rateLimitExceeded", "userRateLimitExceeded"}
+
+
+class GmailRateLimited(Exception):
+    """Gmail kept refusing requests for quota reasons even after backing off."""
+
+    def __init__(self):
+        super().__init__("Gmail is rate-limiting this account right now. Wait a minute, then scan again.")
+
+
+class _Throttle:
+    """Caps Gmail calls per second across all sync worker threads, so a scan
+    stays well inside the per-user "units per minute" quota (messages.get
+    costs 5 units, and the default per-user limit is 15,000 units/minute)."""
+
+    def __init__(self, per_second: float):
+        self._interval = 1.0 / per_second
+        self._next = 0.0
+        self._lock = threading.Lock()
+
+    def wait(self):
+        with self._lock:
+            now = time.monotonic()
+            slot = max(now, self._next)
+            self._next = slot + self._interval
+        if slot > now:
+            time.sleep(slot - now)
+
+
+_throttle = _Throttle(settings.gmail_requests_per_second)
+
+
+def _is_rate_limit(error: HttpError) -> bool:
+    if error.resp.status == 429:
+        return True
+    if error.resp.status != 403:
+        return False
+    try:
+        details = json.loads(error.content.decode()).get("error", {}).get("errors", [])
+    except (ValueError, AttributeError):
+        return "rateLimitExceeded" in str(error)
+    return any(d.get("reason") in RATE_LIMIT_REASONS for d in details)
 
 
 @dataclass
@@ -79,16 +125,20 @@ class GmailClient:
         return self._with_retry(lambda: self._service.users().watch(userId="me", body=body).execute())
 
     @staticmethod
-    def _with_retry(fn, retries: int = 3, backoff_seconds: float = 1.0):
-        """FR 5.5: exponential backoff for transient failures."""
-        last_error = None
+    def _with_retry(fn, retries: int = 6, backoff_seconds: float = 1.0):
+        """Exponential backoff with jitter for transient failures and quota
+        errors. Gmail reports quota as 429 or as 403 rateLimitExceeded; the
+        per-minute window needs up to ~a minute of total waiting to clear."""
         for attempt in range(retries):
+            _throttle.wait()
             try:
                 return fn()
             except HttpError as e:
-                last_error = e
-                if e.resp.status in (429, 500, 502, 503):
-                    time.sleep(backoff_seconds * (2 ** attempt))
-                    continue
-                raise
-        raise last_error
+                rate_limited = _is_rate_limit(e)
+                if not (rate_limited or e.resp.status in (500, 502, 503)):
+                    raise
+                if attempt == retries - 1:
+                    if rate_limited:
+                        raise GmailRateLimited() from e
+                    raise
+                time.sleep(min(backoff_seconds * (2 ** attempt), 32) + random.uniform(0, 1))
