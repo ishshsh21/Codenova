@@ -6,6 +6,7 @@ import re
 from google.genai import types
 from sqlalchemy.orm import Session
 
+from app.ai.audience import OTHER_CLASS
 from app.ai.llm_extractor import _get_client, _is_configured
 from app.config import get_settings
 from app.models import Task, TaskStatus, User
@@ -102,7 +103,8 @@ def respond(db: Session, user: User, message: str, history: list[dict[str, str]]
         return "Please enter a question about your workday.", None
     if any(re.search(pattern, clean_message, re.IGNORECASE) for pattern in OUT_OF_SCOPE_PATTERNS):
         return OUT_OF_SCOPE_REPLY, None
-    tasks = db.query(Task).filter(Task.user_id == user.id).all()
+    # Tasks for other classes are FYI-only, so the assistant never ranks them.
+    tasks = db.query(Task).filter(Task.user_id == user.id, Task.audience != OTHER_CLASS).all()
     action = _perform_supported_action(clean_message, tasks, user, db)
     if action:
         return action

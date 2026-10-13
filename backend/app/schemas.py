@@ -15,6 +15,7 @@ class UserOut(BaseModel):
     notify_scan_completion: bool
     vip_senders: list[str] = []
     ignored_senders: list[str] = []
+    my_classes: list[str] = []
 
     class Config:
         from_attributes = True
@@ -120,6 +121,7 @@ class TaskOut(BaseModel):
     is_blocking: bool
     notes: str
     snoozed_until: Optional[datetime] = None
+    audience: str = "GENERAL"
     depends_on: list[str] = []
     sources: list[TaskSourceOut] = []
     created_at: datetime
@@ -148,6 +150,7 @@ class UserSettingsIn(BaseModel):
     notify_scan_completion: Optional[bool] = None
     vip_senders: Optional[list[str]] = None
     ignored_senders: Optional[list[str]] = None
+    my_classes: Optional[list[str]] = None
 
 
 class DataSummaryOut(BaseModel):
@@ -173,23 +176,37 @@ class AgendaTaskOut(BaseModel):
     estimated_effort_minutes: int
     blocking: bool
     reason: list[str]
-    scheduled_time: Optional[str] = None
-    source_thread_id: Optional[str] = None
 
 
-class DailyAgendaOut(BaseModel):
+class NowOut(BaseModel):
+    """The Now screen. The three task lists never share a task."""
     date: str
-    summary: dict[str, int]
-    task_ids: dict[str, list[str]]
-    timeline: list[AgendaTaskOut]
-    no_action_count: int
+    overdue: list[AgendaTaskOut]
+    due_today: list[AgendaTaskOut]
+    up_next: list[AgendaTaskOut]
+    open_count: int
+    fyi_count: int
+    planned_minutes_today: int
 
 
-class WeeklyAgendaOut(BaseModel):
+class PlannerOut(BaseModel):
     week_start: str
     week_end: str
     days: dict[str, list[AgendaTaskOut]]
-    later: list[AgendaTaskOut]
+    undated: list[AgendaTaskOut]
+
+
+class FyiItemOut(BaseModel):
+    id: str
+    group: str  # OTHER_CLASS | NEWSLETTER | NOTICE | AUTOMATED
+    subject: str
+    sender_name: str
+    sender_email: str
+    snippet: str
+    internal_date: Optional[datetime] = None
+    gmail_url: str
+    audience_label: str = ""
+    reason: str
 
 
 class AssistantMessageIn(BaseModel):

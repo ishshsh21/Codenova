@@ -1,159 +1,98 @@
 """
-FR-15 Agenda Generation — Today / Tomorrow / This Week / Later / No Action,
-scheduled inside the user's working hours, ordered by priority + deadline.
+Builds the two task views. Each answers a different question, so they never
+show the same thing in the same way:
+
+- Now:     what needs doing right now (overdue, due today, then the next
+           few by priority). The three lists are disjoint.
+- Planner: when things are due over the next 7 days, plus undated work.
+
+Tasks addressed to another class (audience OTHER_CLASS) appear in neither;
+their mail lives in the FYI feed instead.
 """
-from datetime import datetime, timedelta, time as dtime
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session
 
+from app.ai.audience import OTHER_CLASS
 from app.models import Task, TaskStatus, User, EmailMessage
 
-NO_ACTION_CLASSIFICATIONS = ("FYI", "NEWSLETTER", "AUTOMATED_NOTIFICATION", "COMPLETED")
-
+FYI_CLASSIFICATIONS = ("FYI", "NEWSLETTER", "AUTOMATED_NOTIFICATION", "COMPLETED")
 PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3, "P4": 4}
+UP_NEXT_LIMIT = 3
 
 
 def _sort_key(task: Task):
-    deadline = task.deadline or datetime.max
-    return (PRIORITY_ORDER.get(task.priority, 5), deadline, -task.priority_score)
+    return (PRIORITY_ORDER.get(task.priority, 5), task.deadline or datetime.max, -task.priority_score)
 
 
-def _task_reason(task: Task) -> list[str]:
-    return task.priority_reasons or []
+def _out(task: Task) -> dict:
+    return {
+        "id": task.id,
+        "title": task.title,
+        "priority": task.priority,
+        "priority_score": task.priority_score,
+        "deadline": task.deadline,
+        "estimated_effort_minutes": task.estimated_effort_minutes,
+        "blocking": task.is_blocking,
+        "reason": task.priority_reasons or [],
+    }
 
 
-def _schedule_slots(tasks: list[Task], workday_start: str, workday_end: str) -> dict[str, str]:
-    """Greedy scheduling of today's tasks into working-hour slots (FR-15)."""
-    h, m = map(int, workday_start.split(":"))
-    cursor = datetime.combine(datetime.utcnow().date(), dtime(h, m))
-    end_h, end_m = map(int, workday_end.split(":"))
-    day_end = datetime.combine(datetime.utcnow().date(), dtime(end_h, end_m))
-
-    slots = {}
-    for task in tasks:
-        if cursor >= day_end:
-            break
-        slots[task.id] = cursor.strftime("%H:%M")
-        cursor += timedelta(minutes=max(task.estimated_effort_minutes, 15))
-    return slots
-
-
-def build_daily_agenda(db: Session, user: User, target_date: datetime | None = None) -> dict:
-    now = target_date or datetime.utcnow()
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    day_end = day_start + timedelta(days=1)
-
-    open_tasks = [
-        task for task in db.query(Task).filter_by(user_id=user.id, status=TaskStatus.OPEN.value).all()
+def _active_tasks(db: Session, user: User, now: datetime) -> list[Task]:
+    return [
+        task for task in db.query(Task).filter(
+            Task.user_id == user.id,
+            Task.status == TaskStatus.OPEN.value,
+            Task.audience != OTHER_CLASS,
+        ).all()
         if not task.snoozed_until or task.snoozed_until <= now
     ]
 
-    today_tasks = [
-        t for t in open_tasks
-        if (t.deadline and now <= t.deadline < day_end)
-        or t.priority in ("P0", "P1")
-    ]
-    today_tasks.sort(key=_sort_key)
 
-    # A deadline becomes overdue as soon as its timestamp passes, rather than
-    # waiting for the next calendar day.
-    overdue = [t for t in open_tasks if t.deadline and t.deadline < now]
-    due_today = [t for t in open_tasks if t.deadline and now <= t.deadline < day_end]
-    this_week_end = day_start + timedelta(days=7)
-    this_week = [
-        t for t in open_tasks
-        if t.deadline and day_start <= t.deadline < this_week_end
-    ]
-
-    no_action_count = (
-        db.query(EmailMessage)
-        .filter(EmailMessage.user_id == user.id, EmailMessage.classification.in_(NO_ACTION_CLASSIFICATIONS))
-        .count()
+def fyi_query(db: Session, user: User):
+    return db.query(EmailMessage).filter(
+        EmailMessage.user_id == user.id,
+        EmailMessage.audience_locked.is_(False),  # claimed by the user: it's a task now
+        (EmailMessage.audience == OTHER_CLASS) | EmailMessage.classification.in_(FYI_CLASSIFICATIONS),
     )
 
-    slots = _schedule_slots(today_tasks, user.workday_start, user.workday_end)
 
-    timeline = [
-        {
-            "id": t.id,
-            "title": t.title,
-            "priority": t.priority,
-            "priority_score": t.priority_score,
-            "deadline": t.deadline,
-            "estimated_effort_minutes": t.estimated_effort_minutes,
-            "blocking": t.is_blocking,
-            "reason": _task_reason(t),
-            "scheduled_time": slots.get(t.id),
-            "source_thread_id": None,
-        }
-        for t in today_tasks
-    ]
+def build_now(db: Session, user: User, now: datetime | None = None) -> dict:
+    now = now or datetime.utcnow()
+    day_end = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    tasks = sorted(_active_tasks(db, user, now), key=_sort_key)
 
-    summary = {
-        "actionable": len(open_tasks),
-        "critical": len([t for t in open_tasks if t.priority == "P0"]),
-        "due_today": len(due_today),
-        "overdue": len(overdue),
-        "this_week": len(this_week),
-    }
+    # A deadline is overdue as soon as its timestamp passes.
+    overdue = [t for t in tasks if t.deadline and t.deadline < now]
+    due_today = [t for t in tasks if t.deadline and now <= t.deadline < day_end]
+    taken = {t.id for t in overdue + due_today}
+    up_next = [t for t in tasks if t.id not in taken and t.priority != "P4"][:UP_NEXT_LIMIT]
 
     return {
         "date": now.date().isoformat(),
-        "summary": summary,
-        # The client uses these exact sets for KPI filtering, ensuring the
-        # filtered task list and its corresponding card always agree.
-        "task_ids": {
-            "due_today": [t.id for t in due_today],
-            "overdue": [t.id for t in overdue],
-            "this_week": [t.id for t in this_week],
-        },
-        "timeline": timeline,
-        "no_action_count": no_action_count,
+        "overdue": [_out(t) for t in overdue],
+        "due_today": [_out(t) for t in due_today],
+        "up_next": [_out(t) for t in up_next],
+        "open_count": len(tasks),
+        "fyi_count": fyi_query(db, user).count(),
+        "planned_minutes_today": sum(t.estimated_effort_minutes for t in overdue + due_today),
     }
 
 
-def build_weekly_agenda(db: Session, user: User, start: datetime | None = None) -> dict:
-    start = (start or datetime.utcnow()).replace(hour=0, minute=0, second=0, microsecond=0)
+def build_planner(db: Session, user: User, start: datetime | None = None) -> dict:
+    now = datetime.utcnow()
+    start = (start or now).replace(hour=0, minute=0, second=0, microsecond=0)
     end = start + timedelta(days=7)
-
-    open_tasks = [
-        task for task in db.query(Task).filter_by(user_id=user.id, status=TaskStatus.OPEN.value).all()
-        if not task.snoozed_until or task.snoozed_until <= datetime.utcnow()
-    ]
+    tasks = sorted(_active_tasks(db, user, now), key=_sort_key)
 
     days: dict[str, list[dict]] = {}
-    later: list[dict] = []
-
     for i in range(7):
-        day = start + timedelta(days=i)
-        key = day.date().isoformat()
-        day_tasks = [t for t in open_tasks if t.deadline and t.deadline.date() == day.date()]
-        day_tasks.sort(key=_sort_key)
-        days[key] = [
-            {
-                "id": t.id, "title": t.title, "priority": t.priority,
-                "priority_score": t.priority_score, "deadline": t.deadline,
-                "estimated_effort_minutes": t.estimated_effort_minutes,
-                "blocking": t.is_blocking, "reason": _task_reason(t),
-                "scheduled_time": None, "source_thread_id": None,
-            }
-            for t in day_tasks
-        ]
-
-    for t in open_tasks:
-        if not t.deadline or t.deadline >= end:
-            later.append({
-                "id": t.id, "title": t.title, "priority": t.priority,
-                "priority_score": t.priority_score, "deadline": t.deadline,
-                "estimated_effort_minutes": t.estimated_effort_minutes,
-                "blocking": t.is_blocking, "reason": _task_reason(t),
-                "scheduled_time": None, "source_thread_id": None,
-            })
-    later.sort(key=lambda x: PRIORITY_ORDER.get(x["priority"], 5))
+        day = (start + timedelta(days=i)).date()
+        days[day.isoformat()] = [_out(t) for t in tasks if t.deadline and t.deadline.date() == day]
 
     return {
         "week_start": start.date().isoformat(),
         "week_end": (end - timedelta(days=1)).date().isoformat(),
         "days": days,
-        "later": later,
+        "undated": [_out(t) for t in tasks if not t.deadline],
     }
