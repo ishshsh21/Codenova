@@ -6,8 +6,16 @@ PriorityScore = 30% DeadlineUrgency + 20% BusinessImpact + 15% BlockingDependenc
 
 Every factor is normalized to 0..1 and every score comes with a human-readable
 explanation (TRD: "Every priority must have an explanation").
+
+Class audience (ai/audience.py) is applied on top: mail addressed to the
+user's own class gets a boost, and mail addressed to a different class is
+capped at P4 (info) no matter how urgent its wording is.
 """
 from datetime import datetime
+
+from app.ai.audience import MINE, OTHER_CLASS
+
+MY_CLASS_BOOST = 0.1
 
 WEIGHTS = {
     "deadline_urgency": 0.30,
@@ -92,9 +100,16 @@ def score_task(
     effort_minutes: int,
     deadline: datetime | None,
     is_vip: bool = False,
+    audience: str = "GENERAL",
+    audience_reason: str | None = None,
     now: datetime | None = None,
 ) -> tuple[float, str, list[str]]:
     now = now or datetime.utcnow()
+
+    if audience == OTHER_CLASS:
+        # Another class's deadline is not the user's deadline: don't let its
+        # urgency words or due date leak into the user's priorities.
+        return 0.05, "P4", [audience_reason or "Addressed to a different class"]
 
     du, du_reason = _deadline_urgency(deadline, now)
     bi, bi_reason = _business_impact(sender_email, project, is_vip)
@@ -111,6 +126,8 @@ def score_task(
         + ci * WEIGHTS["context_importance"]
         + ev * WEIGHTS["effort_vs_deadline"]
     )
+    if audience == MINE:
+        score += MY_CLASS_BOOST
     score = round(min(max(score, 0.0), 1.0), 3)
 
     if score >= 0.75:
@@ -124,7 +141,8 @@ def score_task(
     else:
         level = "P4"
 
-    reasons = [r for r in (du_reason, bd_reason, eu_reason, bi_reason, ci_reason, ev_reason) if r]
+    class_reason = audience_reason if audience == MINE else None
+    reasons = [r for r in (class_reason, du_reason, bd_reason, eu_reason, bi_reason, ci_reason, ev_reason) if r]
     if not reasons:
         reasons = ["No strong urgency signals detected"]
 

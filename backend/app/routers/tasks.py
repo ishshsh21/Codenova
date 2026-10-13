@@ -27,7 +27,7 @@ def _to_task_out(db: Session, task: Task) -> TaskOut:
             "action_type", "deadline", "deadline_raw", "deadline_confidence",
             "owner_type", "owner_label", "project", "project_confidence",
             "estimated_effort_minutes", "confidence", "is_blocking",
-            "notes", "snoozed_until", "created_at", "updated_at",
+            "notes", "snoozed_until", "audience", "created_at", "updated_at",
         ]},
         priority_reasons=task.priority_reasons or [],
         depends_on=[d.depends_on_task_id for d in deps],

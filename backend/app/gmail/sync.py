@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.gmail.mime_parser import extract_body_from_payload, parse_header, parse_sender
 from app.gmail.client import GmailClient
+from app.ai.audience import OTHER_CLASS, GENERAL, detect_audience
 from app.ai.llm_extractor import classify_and_extract_llm
 from app.ai.priority import score_task
 from app.ai.dedup import find_duplicate
@@ -130,6 +131,7 @@ def run_sync(
     messages_processed = 0
     tasks_created = 0
     tasks_updated = 0
+    other_class_messages = 0
 
     # ---- Persist + thread reconstruction (FR-05) ----
     thread_counts: dict[str, int] = {}
@@ -200,6 +202,7 @@ def run_sync(
 
         # ---- FR-06..FR-11: classification + extraction ----
         extraction = extractions[r["gmail_message_id"]]
+        audience = detect_audience(r["subject"], r["normalized_body"], user.my_classes)
 
         msg = EmailMessage(
             user_id=user.id,
@@ -217,11 +220,17 @@ def run_sync(
             classification_confidence=extraction.classification_confidence,
             classification_evidence=extraction.classification_evidence,
             processing_status="PROCESSED",
+            audience=audience.kind,
+            audience_label=audience.label,
         )
         db.add(msg)
         db.flush()
         messages_processed += 1
 
+        # Mail for another class is information only (it shows in FYI), never a task.
+        if audience.kind == OTHER_CLASS:
+            other_class_messages += 1
+            continue
         if not (extraction.is_actionable and extraction.task_title):
             continue
 
@@ -258,6 +267,7 @@ def run_sync(
                 estimated_effort_minutes=extraction.estimated_effort_minutes,
                 confidence=extraction.task_confidence,
                 is_blocking=extraction.is_blocking,
+                audience=audience.kind,
             )
             db.add(task)
             db.flush()
@@ -294,6 +304,32 @@ def run_sync(
     # ---- FR-14: (re)score priority for all open tasks ----
     if progress_callback:
         progress_callback("BUILDING_AGENDA", messages_fetched, messages_fetched)
+    reprioritize(db, user, now=started, thread_counts=thread_counts)
+
+    if user.gmail_connection:
+        user.gmail_connection.last_synced_at = datetime.utcnow()
+        db.commit()
+
+    duration_ms = int((datetime.utcnow() - started).total_seconds() * 1000)
+    return {
+        "messages_fetched": messages_fetched,
+        "messages_processed": messages_processed,
+        "tasks_created": tasks_created,
+        "tasks_updated": tasks_updated,
+        "other_class_messages": other_class_messages,
+        "duration_ms": duration_ms,
+        "start_date": start_date,
+        "end_date": end_date,
+        "gmail_query": gmail_query,
+    }
+
+
+def reprioritize(
+    db: Session, user: User, now: datetime | None = None, thread_counts: dict[str, int] | None = None,
+) -> None:
+    """Re-score every open task. Runs after each scan and whenever the user's
+    classes, VIP list or other ranking inputs change."""
+    now = now or datetime.utcnow()
     dependents_of: dict[str, int] = {}
     for dep in db.query(TaskDependency).all():
         dependents_of[dep.depends_on_task_id] = dependents_of.get(dep.depends_on_task_id, 0) + 1
@@ -306,7 +342,18 @@ def run_sync(
             .order_by(EmailMessage.internal_date.desc())
             .first()
         )
-        thread_count = thread_counts.get(source_msg.gmail_thread_id, 1) if source_msg else 1
+        if source_msg:
+            thread_count = (thread_counts or {}).get(source_msg.gmail_thread_id)
+            if thread_count is None:
+                thread = db.query(EmailThread).filter_by(
+                    user_id=user.id, gmail_thread_id=source_msg.gmail_thread_id
+                ).first()
+                thread_count = thread.message_count if thread else 1
+            audience = detect_audience(source_msg.subject, source_msg.normalized_body, user.my_classes)
+            audience_kind = source_msg.audience if source_msg.audience_locked else audience.kind
+            audience_reason = "You marked this as yours" if source_msg.audience_locked else audience.reason
+        else:
+            thread_count, audience_kind, audience_reason = 1, GENERAL, None
         score, level, reasons = score_task(
             text_for_urgency=f"{task.title} {task.description}",
             sender_email=source_msg.sender_email if source_msg else "",
@@ -317,26 +364,24 @@ def run_sync(
             classification=source_msg.classification if source_msg else "",
             effort_minutes=task.estimated_effort_minutes,
             deadline=task.deadline,
-            now=started,
+            now=now,
             is_vip=_sender_matches(source_msg.sender_email if source_msg else "", user.vip_senders or []),
+            audience=audience_kind,
+            audience_reason=audience_reason,
         )
+        task.audience = audience_kind
         task.priority_score = score
         task.priority = level
         task.priority_reasons = reasons
     db.commit()
 
-    if user.gmail_connection:
-        user.gmail_connection.last_synced_at = datetime.utcnow()
-        db.commit()
 
-    duration_ms = int((datetime.utcnow() - started).total_seconds() * 1000)
-    return {
-        "messages_fetched": messages_fetched,
-        "messages_processed": messages_processed,
-        "tasks_created": tasks_created,
-        "tasks_updated": tasks_updated,
-        "duration_ms": duration_ms,
-        "start_date": start_date,
-        "end_date": end_date,
-        "gmail_query": gmail_query,
-    }
+def refresh_audiences(db: Session, user: User) -> None:
+    """Re-detect the audience of every stored message after the user edits
+    their classes, then re-rank tasks so the change shows up immediately."""
+    for msg in db.query(EmailMessage).filter_by(user_id=user.id, audience_locked=False).all():
+        audience = detect_audience(msg.subject, msg.normalized_body, user.my_classes)
+        msg.audience = audience.kind
+        msg.audience_label = audience.label
+    db.commit()
+    reprioritize(db, user)

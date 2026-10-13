@@ -88,6 +88,9 @@ class User(Base):
     notify_scan_completion: Mapped[bool] = mapped_column(Boolean, default=True)
     vip_senders: Mapped[list] = mapped_column(JSON, default=list)
     ignored_senders: Mapped[list] = mapped_column(JSON, default=list)
+    # The classes/divisions/courses the user is actually in. Mail addressed to
+    # any other class is kept as information, never as a task (see ai/audience.py).
+    my_classes: Mapped[list] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -187,6 +190,12 @@ class EmailMessage(Base):
     classification_evidence: Mapped[str] = mapped_column(Text, default="")
     processing_status: Mapped[str] = mapped_column(String, default="PENDING")  # PENDING | PROCESSED | FAILED
 
+    # Who the message is addressed to: MINE | OTHER_CLASS | GENERAL.
+    audience: Mapped[str] = mapped_column(String, default="GENERAL")
+    audience_label: Mapped[str] = mapped_column(String, default="")
+    # Set when the user claims an FYI message as their own; re-detection then leaves it alone.
+    audience_locked: Mapped[bool] = mapped_column(Boolean, default=False)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -218,6 +227,7 @@ class Task(Base):
     is_blocking: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str] = mapped_column(Text, default="")
     snoozed_until: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    audience: Mapped[str] = mapped_column(String, default="GENERAL")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

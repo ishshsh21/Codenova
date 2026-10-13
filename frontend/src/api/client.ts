@@ -1,149 +1,58 @@
 import axios from 'axios';
 import type {
-  User, GmailStatus, ScanRun, ScanStart, SyncRequest, Task, DailyAgenda, WeeklyAgenda, FollowUpAlert, Notification, DataSummary, AssistantMessage, AssistantChatResponse,
+  AssistantMessage, DataSummary, FyiItem, GmailStatus, Notification, NowView, PlannerView,
+  ScanRange, ScanRun, ScanStart, Task, User,
 } from '../types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
-export const api = axios.create({
-  baseURL: BASE_URL,
-  withCredentials: true, // send the session cookie set by /api/auth/google/callback
-});
+// withCredentials sends the session cookie set by /api/auth/google/callback.
+export const api = axios.create({ baseURL: BASE_URL, withCredentials: true });
 
-// ---- Auth ----
-export const startGoogleLogin = async (): Promise<{ authorization_url: string }> => {
-  const { data } = await api.get('/api/auth/google');
-  return data;
-};
+const get = async <T>(url: string): Promise<T> => (await api.get<T>(url)).data;
 
-export const getMe = async (): Promise<User> => {
-  const { data } = await api.get('/api/auth/me');
-  return data;
-};
+export function errorMessage(err: unknown, fallback: string): string {
+  const detail = (err as { response?: { data?: { detail?: string | { msg: string }[] } } })?.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) return detail[0]?.msg ?? fallback;
+  return fallback;
+}
 
-export const logout = async (): Promise<void> => {
-  await api.post('/api/auth/logout');
-};
+// ---- Account ----
+export const startGoogleLogin = () => get<{ authorization_url: string }>('/api/auth/google');
+export const getMe = () => get<User>('/api/auth/me');
+export const logout = async () => { await api.post('/api/auth/logout'); };
+export const updateProfile = async (patch: Partial<User>): Promise<User> => (await api.patch('/api/auth/settings', patch)).data;
+export const getDataSummary = () => get<DataSummary>('/api/auth/data-summary');
+export const deleteImportedData = async () => { await api.delete('/api/auth/imported-data'); };
+export const deleteAccount = async () => { await api.delete('/api/auth/account'); };
 
-export const deleteAccount = async (): Promise<void> => {
-  await api.delete('/api/auth/account');
-};
+// ---- Gmail sync ----
+export const getGmailStatus = () => get<GmailStatus>('/api/gmail/status');
+export const startScan = async (range: ScanRange = {}): Promise<ScanStart> => (await api.post('/api/gmail/sync', range)).data;
+export const getScan = (id: string) => get<ScanRun>(`/api/gmail/scans/${id}`);
+export const getScans = () => get<ScanRun[]>('/api/gmail/scans');
+export const rerunScan = async (id: string): Promise<ScanStart> => (await api.post(`/api/gmail/scans/${id}/rerun`)).data;
+export const deleteScan = async (id: string) => { await api.delete(`/api/gmail/scans/${id}`); };
+export const disconnectGmail = async () => { await api.delete('/api/gmail/disconnect'); };
 
-export const updateSettings = async (settings: Partial<User>): Promise<User> => {
-  const { data } = await api.patch('/api/auth/settings', settings);
-  return data;
-};
+// ---- Notifications ----
+export const getNotifications = () => get<Notification[]>('/api/gmail/notifications');
+export const markNotificationsRead = async () => { await api.post('/api/gmail/notifications/read-all'); };
 
-export const getDataSummary = async (): Promise<DataSummary> => {
-  const { data } = await api.get('/api/auth/data-summary');
-  return data;
-};
-
-export const deleteImportedData = async (): Promise<void> => {
-  await api.delete('/api/auth/imported-data');
-};
-
-// ---- Gmail ----
-export const getGmailStatus = async (): Promise<GmailStatus> => {
-  const { data } = await api.get('/api/gmail/status');
-  return data;
-};
-
-export const syncGmail = async (range?: SyncRequest): Promise<ScanStart> => {
-  const { data } = await api.post('/api/gmail/sync', range ?? {});
-  return data;
-};
-
-export const getScan = async (id: string): Promise<ScanRun> => {
-  const { data } = await api.get(`/api/gmail/scans/${id}`);
-  return data;
-};
-
-export const rerunScan = async (id: string): Promise<ScanStart> => {
-  const { data } = await api.post(`/api/gmail/scans/${id}/rerun`);
-  return data;
-};
-
-export const deleteScan = async (id: string): Promise<void> => {
-  await api.delete(`/api/gmail/scans/${id}`);
-};
-
-export const getScans = async (): Promise<ScanRun[]> => {
-  const { data } = await api.get('/api/gmail/scans');
-  return data;
-};
-
-export const getNotifications = async (): Promise<Notification[]> => {
-  const { data } = await api.get('/api/gmail/notifications');
-  return data;
-};
-
-export const markNotificationsRead = async (): Promise<void> => {
-  await api.post('/api/gmail/notifications/read-all');
-};
-
-export const disconnectGmail = async (): Promise<void> => {
-  await api.delete('/api/gmail/disconnect');
-};
+// ---- Views ----
+export const getNow = () => get<NowView>('/api/agenda/now');
+export const getPlanner = () => get<PlannerView>('/api/agenda/planner');
+export const getFyi = () => get<FyiItem[]>('/api/fyi');
+export const claimFyi = async (id: string): Promise<{ task_id: string }> => (await api.post(`/api/fyi/${id}/claim`)).data;
 
 // ---- Tasks ----
-export const listTasks = async (params?: { status?: string; priority?: string }): Promise<Task[]> => {
-  const { data } = await api.get('/api/tasks', { params });
-  return data;
-};
+export const getTask = (id: string) => get<Task>(`/api/tasks/${id}`);
+export const updateTask = async (id: string, patch: Partial<Task>): Promise<Task> => (await api.patch(`/api/tasks/${id}`, patch)).data;
+export const completeTask = async (id: string) => { await api.post(`/api/tasks/${id}/complete`); };
+export const dismissTask = async (id: string) => { await api.post(`/api/tasks/${id}/dismiss`); };
+export const markNotMine = async (id: string) => { await api.post(`/api/tasks/${id}/feedback`, { feedback_type: 'not_my_task' }); };
 
-export const getTask = async (id: string): Promise<Task> => {
-  const { data } = await api.get(`/api/tasks/${id}`);
-  return data;
-};
-
-export const updateTask = async (id: string, payload: Partial<Task>): Promise<Task> => {
-  const { data } = await api.patch(`/api/tasks/${id}`, payload);
-  return data;
-};
-
-export const completeTask = async (id: string): Promise<Task> => {
-  const { data } = await api.post(`/api/tasks/${id}/complete`);
-  return data;
-};
-
-export const dismissTask = async (id: string): Promise<Task> => {
-  const { data } = await api.post(`/api/tasks/${id}/dismiss`);
-  return data;
-};
-
-export const sendTaskFeedback = async (id: string, feedback_type: string, new_value?: Record<string, unknown>): Promise<void> => {
-  await api.post(`/api/tasks/${id}/feedback`, { feedback_type, new_value });
-};
-
-// ---- Agenda ----
-export const getDailyAgenda = async (): Promise<DailyAgenda> => {
-  const { data } = await api.get('/api/agenda/today');
-  return data;
-};
-
-export const getWeeklyAgenda = async (): Promise<WeeklyAgenda> => {
-  const { data } = await api.get('/api/agenda/week');
-  return data;
-};
-
-export const replanAgenda = async (): Promise<DailyAgenda> => {
-  const { data } = await api.post('/api/agenda/replan');
-  return data;
-};
-
-export const getFollowUps = async (): Promise<{ alerts: FollowUpAlert[] }> => {
-  const { data } = await api.get('/api/agenda/follow-ups');
-  return data;
-};
-
-export const chatWithAssistant = async (message: string, history: AssistantMessage[]): Promise<AssistantChatResponse> => {
-  const { data } = await api.post('/api/assistant/chat', { message, history });
-  return data;
-};
-
-// ---- Search ----
-export const search = async (q: string): Promise<{ tasks: Partial<Task>[]; emails: unknown[] }> => {
-  const { data } = await api.get('/api/search', { params: { q } });
-  return data;
-};
+// ---- Assistant ----
+export const askAssistant = async (message: string, history: AssistantMessage[]): Promise<{ message: string }> =>
+  (await api.post('/api/assistant/chat', { message, history })).data;
