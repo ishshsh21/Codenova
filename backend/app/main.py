@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import Base, engine, migrate_sqlite_schema
-from app.routers import auth, gmail, tasks, agenda, fyi, search, assistant
+from app.routers import auth, gmail, tasks, agenda, search, assistant
 
 # Never log raw email bodies or OAuth tokens (TRD Section 10/14).
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -34,7 +34,6 @@ app.include_router(auth.router)
 app.include_router(gmail.router)
 app.include_router(tasks.router)
 app.include_router(agenda.router)
-app.include_router(fyi.router)
 app.include_router(search.router)
 app.include_router(assistant.router)
 

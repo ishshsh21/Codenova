@@ -21,7 +21,6 @@ from app.models import (
 from sqlalchemy import or_
 from app.security import create_session_token, encrypt_token, SESSION_COOKIE_NAME, get_current_user
 from app.schemas import UserOut, UserSettingsIn, DataSummaryOut
-from app.gmail.sync import refresh_audiences, reprioritize
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 settings = get_settings()
@@ -162,18 +161,9 @@ def update_settings(payload: UserSettingsIn, user: User = Depends(get_current_us
     values = payload.model_dump(exclude_unset=True)
     if "default_scan_days" in values and not 1 <= values["default_scan_days"] <= 365:
         raise HTTPException(422, "default_scan_days must be between 1 and 365")
-    if "my_classes" in values:
-        values["my_classes"] = [c.strip() for c in values["my_classes"] or [] if c.strip()]
-    classes_changed = "my_classes" in values and values["my_classes"] != (user.my_classes or [])
-    ranking_changed = "vip_senders" in values and values["vip_senders"] != (user.vip_senders or [])
     for field, value in values.items():
         setattr(user, field, value)
     db.commit()
-    # Re-rank right away so the Now and FYI screens reflect the new classes.
-    if classes_changed:
-        refresh_audiences(db, user)
-    elif ranking_changed:
-        reprioritize(db, user)
     db.refresh(user)
     return user
 

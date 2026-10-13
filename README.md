@@ -1,48 +1,19 @@
-# Codenova
+# Gmail AI Workday Agent — MVP
 
-Codenova reads your Gmail (read-only), pulls out the things you actually have
-to do, ranks them, and sets aside everything that is only information,
-including mail meant for a class you're not in.
+A working implementation of the Gmail AI Workday Agent TRD: signs you in with
+your real Google account, reads your Gmail inbox (read-only), classifies every
+message, extracts tasks with deadlines/owners/priority, detects dependencies
+and duplicates, and generates a prioritized daily/weekly agenda.
 
 ```
-codenova/
-├── backend/     FastAPI: Google OAuth, Gmail scanning, task extraction, class-aware ranking
-└── frontend/    React + TypeScript (Vite)
+gmail-workday-agent/
+├── backend/     FastAPI — Google OAuth, Gmail ingestion, classification, priority engine, agenda API
+└── frontend/    React + TypeScript (Vite) — dashboard UI
 ```
 
-## Sections
-
-Every feature lives in exactly one section.
-
-| Section | What it's for |
-|---|---|
-| **Now** | What needs doing right now: overdue, due today, then the next few by priority. A task appears in only one of those lists. |
-| **Planner** | The next seven days by deadline, plus tasks with no date yet. |
-| **FYI** | Mail worth knowing about that isn't your work: other classes' notices, announcements, newsletters, automated mail. "This is mine" turns an item into a task. |
-| **Sync** | Scan Gmail (default window or chosen dates), watch progress, re-run or remove past scans, scan defaults. |
-| **Profile** | Your classes, important and ignored senders, sign out, and your data (delete imported data, disconnect Gmail, delete account). |
-
-Opening any task shows its one detail sheet (why it's ranked, edit, snooze,
-done / not mine / dismiss). The notification bell and the **Ask** assistant
-live in the top bar.
-
-## Class-aware priority
-
-Add the classes you're in under **Profile → Your classes** (for example
-`Class A`, `SY-B` or `CS201`). On every scan, `backend/app/ai/audience.py`
-reads the subject and opening lines of each email:
-
-- **Addressed to another class** ("Class B students…", "[SY-B] …") → never
-  becomes a task. It goes to FYI as "For Class B, not your class".
-- **Addressed to your class** → ranked a little higher, with "Addressed to
-  your class" as the first reason.
-- **No class named** → ranked as usual.
-
-Changing your classes re-ranks existing tasks immediately.
-
-There is no demo/local user mode. Every session starts with a real Google
-sign-in. You need a Google Cloud project with OAuth credentials before the
-app will run. Full setup below.
+There is no demo/local user mode — every session starts with a real Google
+sign-in and reads your actual Gmail account. You need a Google Cloud project
+with OAuth credentials before the app will run. Full setup below.
 
 ---
 
@@ -51,7 +22,7 @@ app will run. Full setup below.
 ### 1. Create a project
 1. Go to https://console.cloud.google.com/
 2. Top-left project dropdown → **New Project**
-3. Name it (e.g. `codenova`) → **Create**
+3. Name it (e.g. `workday-signal`) → **Create**
 4. Make sure it's selected in the top dropdown before continuing
 
 ### 2. Enable the Gmail API
@@ -62,7 +33,7 @@ app will run. Full setup below.
 1. **APIs & Services** → **OAuth consent screen**
 2. User type: **External** (unless you have a Google Workspace org and want **Internal**) → **Create**
 3. Fill in:
-   - App name: `Codenova`
+   - App name: `Workday Signal`
    - User support email: your email
    - Developer contact email: your email
 4. **Save and Continue**
@@ -86,7 +57,7 @@ public users to sign in.
 1. **APIs & Services** → **Credentials**
 2. **Create Credentials** → **OAuth client ID**
 3. Application type: **Web application**
-4. Name: `Codenova Backend`
+4. Name: `Workday Signal Backend`
 5. **Authorized redirect URIs** → **Add URI**:
    ```
    http://localhost:8000/api/auth/google/callback
@@ -184,14 +155,16 @@ Runs at `http://localhost:5173`.
 3. Sign in with an account you added as a **test user** in step 3.6 (any
    other Google account will be rejected while the app is in Testing status)
 4. You'll likely see "Google hasn't verified this app" — expected for apps in
-   Testing mode. Click **Advanced** → **Go to Codenova (unsafe)**
+   Testing mode. Click **Advanced** → **Go to Workday Signal (unsafe)**
 5. Consent screen shows the `gmail.readonly` scope → **Continue**
 6. You're redirected back through `http://localhost:8000/api/auth/google/callback`,
    which sets your session cookie and lands you on the dashboard, signed in
-7. Open **Profile** and add your class, then go to **Sync** and click
-   **Scan the last 30 days** (capped at 150 messages), or pick From/To dates
-   and click **Scan these dates**. Your tasks appear in **Now** and
-   **Planner**; information-only mail appears in **FYI**.
+7. Click **Sync Gmail** for a quick default scan (last 30 days, capped at 150
+   messages), or click **Scan range** next to it to pick a specific **start
+   date → end date** window instead — the sync then only scans emails
+   received inside that range. Either way it runs the pulled messages through
+   classification → task extraction → priority scoring and populates Today's
+   Timeline.
 
 ---
 
@@ -217,7 +190,11 @@ curl -X POST http://localhost:8000/api/gmail/sync \
 - Neither → falls back to the default `newer_than:30d` scan
 - `start_date` after `end_date` → rejected with a 422 validation error
 
-In the UI, these are the From/To fields on the **Sync** page.
+In the UI, this is the **Scan range** control next to **Sync Gmail** on the
+Today page — pick a From/To date and click **Scan this range**, or leave both
+blank and use the plain **Sync Gmail** button for the default window. The
+resolved range and Gmail query used are echoed back in the sync result
+(`gmail_query` field) and shown under the button after each scan.
 
 ## No local/demo fallback
 
@@ -249,20 +226,6 @@ Use a Gemini API key with access to the configured model. The LLM path
 automatically falls back to the heuristic
 extractor if the call fails, returns invalid JSON, or credentials are only
 partially set, so processing never hard-fails.
-
----
-
-## Tests
-
-```bash
-cd backend
-pip install pytest
-python -m pytest tests
-```
-
-The tests cover class detection, ranking, and an end-to-end scan with Gmail
-stubbed out (Now, Planner, FYI, re-ranking after a class change, and claiming
-an FYI item).
 
 ---
 

@@ -32,17 +32,10 @@ def migrate_sqlite_schema():
             "notify_scan_completion": "BOOLEAN NOT NULL DEFAULT 1",
             "vip_senders": "JSON NOT NULL DEFAULT '[]'",
             "ignored_senders": "JSON NOT NULL DEFAULT '[]'",
-            "my_classes": "JSON NOT NULL DEFAULT '[]'",
         },
         "tasks": {
             "notes": "TEXT NOT NULL DEFAULT ''",
             "snoozed_until": "DATETIME",
-            "audience": "VARCHAR NOT NULL DEFAULT 'GENERAL'",
-        },
-        "email_messages": {
-            "audience": "VARCHAR NOT NULL DEFAULT 'GENERAL'",
-            "audience_label": "VARCHAR NOT NULL DEFAULT ''",
-            "audience_locked": "BOOLEAN NOT NULL DEFAULT 0",
         },
         "scan_runs": {
             "stage": "VARCHAR NOT NULL DEFAULT 'QUEUED'",

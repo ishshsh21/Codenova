@@ -1,34 +1,39 @@
 import { useState } from 'react';
-import { errorMessage, startGoogleLogin } from '../api/client';
+import { startGoogleLogin } from '../api/client';
 
 export default function Login() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const signIn = async () => {
+  const handleConnect = async () => {
     setBusy(true);
     setError(null);
     try {
-      // Google's consent screen redirects back to the backend, which sets the session cookie.
-      window.location.href = (await startGoogleLogin()).authorization_url;
+      const res = await startGoogleLogin();
+      // Redirect to Google's consent screen. On return, the backend sets the
+      // session cookie and redirects back here already signed in.
+      window.location.href = res.authorization_url;
     } catch (err) {
       setBusy(false);
-      setError(errorMessage(err, 'Could not start Google sign-in. Check the backend is configured and running.'));
+      const message = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(message || 'Could not start Google sign-in. Check the backend is configured and running.');
     }
   };
 
   return (
-    <div className="login">
+    <div className="login-screen">
       <div className="login-card">
-        <span className="brand-mark brand-mark-lg" aria-hidden="true">✦</span>
-        <h1>Codenova</h1>
-        <p className="muted">
-          Your college inbox, sorted. Codenova pulls the things you actually have to do out of Gmail,
-          ranks them, and sets aside everything meant for other classes.
+        <span className="brand-mark login-mark" aria-hidden="true"><span className="brand-dot" /></span>
+        <h1>Workday Signal</h1>
+        <p className="login-sub">
+          Reads your Gmail, extracts the tasks buried in it, and hands you back a
+          prioritized agenda you can trust — with a reason for every priority.
         </p>
-        <button className="btn btn-primary btn-lg" onClick={signIn} disabled={busy}>{busy ? 'Opening Google…' : 'Sign in with Google'}</button>
-        {error && <p className="banner banner-error">{error}</p>}
-        <small className="muted">Read-only access. Codenova never sends, deletes or changes mail.</small>
+        <button className="btn-primary btn-lg" onClick={handleConnect} disabled={busy}>
+          {busy ? 'Connecting…' : 'Sign in with Google'}
+        </button>
+        {error && <p className="login-error">{error}</p>}
+        <p className="login-scope">Read-only access · gmail.readonly · never sends or modifies mail</p>
       </div>
     </div>
   );

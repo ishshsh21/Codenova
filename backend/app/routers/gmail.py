@@ -108,10 +108,6 @@ def _run_scan(scan_id: str, user_id: str, start_date: date | None, end_date: dat
                 message=(
                     f"{scan.messages_fetched} emails scanned, {scan.tasks_created} new "
                     f"task{'s' if scan.tasks_created != 1 else ''} found."
-                    + (
-                        f" {result['other_class_messages']} for other classes went to FYI."
-                        if result["other_class_messages"] else ""
-                    )
                 ),
             ))
         db.commit()
