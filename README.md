@@ -127,8 +127,10 @@ will return a clear 500 error on sign-in attempts until these are set (see
 ### 8. Run the backend
 
 ```bash
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --reload-dir app --port 8000
 ```
+
+`--reload-dir app` stops the reloader from restarting on changes inside `.venv`.
 
 Runs at `http://localhost:8000`. Interactive API docs at
 `http://localhost:8000/docs`.

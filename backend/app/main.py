@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.database import Base, engine, migrate_sqlite_schema
-from app.routers import auth, gmail, tasks, agenda, search, assistant
+from app.routers import auth, gmail, tasks, agenda, search, assistant, calendar
 
 # Never log raw email bodies or OAuth tokens (TRD Section 10/14).
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -36,6 +36,7 @@ app.include_router(tasks.router)
 app.include_router(agenda.router)
 app.include_router(search.router)
 app.include_router(assistant.router)
+app.include_router(calendar.router)
 
 
 @app.get("/api/health")

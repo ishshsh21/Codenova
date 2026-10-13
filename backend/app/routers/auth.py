@@ -8,7 +8,7 @@ import base64
 import os
 import urllib.parse
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
@@ -16,8 +16,9 @@ from app.config import get_settings
 from app.database import get_db
 from app.models import (
     User, GmailConnection, EmailMessage, EmailThread, Task, TaskSource,
-    TaskDependency, TaskFeedback, ScanRun, Notification,
+    TaskDependency, TaskFeedback, ScanRun, Notification, CalendarConnection, CalendarEvent,
 )
+from app.auth.flows import pop_flow, complete_flow
 from sqlalchemy import or_
 from app.security import create_session_token, encrypt_token, SESSION_COOKIE_NAME, get_current_user
 from app.schemas import UserOut, UserSettingsIn, DataSummaryOut
@@ -71,8 +72,18 @@ def start_google_oauth():
 
 
 @router.get("/google/callback")
-async def google_oauth_callback(code: str, state: str, db: Session = Depends(get_db)):
+async def google_oauth_callback(
+    request: Request, state: str | None = None, code: str | None = None, error: str | None = None,
+    db: Session = Depends(get_db),
+):
     import httpx
+
+    # "Connect Calendar" and "Add Gmail account" share this redirect URI.
+    flow = pop_flow(state)
+    if flow:
+        return await complete_flow(flow, code, error, request.cookies.get(SESSION_COOKIE_NAME), db)
+    if not code or not state:
+        raise HTTPException(400, "Missing OAuth code or state")
 
     code_verifier = _pkce_store.pop(state, None)
     if not code_verifier:
@@ -108,13 +119,15 @@ async def google_oauth_callback(code: str, state: str, db: Session = Depends(get
         db.commit()
         db.refresh(user)
 
-    connection = user.gmail_connection
+    connection = next((c for c in user.gmail_connections if c.google_subject_id == userinfo["sub"]), None)
     if not connection:
         connection = GmailConnection(user_id=user.id, google_account_email=userinfo["email"])
         db.add(connection)
     connection.encrypted_refresh_token = encrypt_token(refresh_token)  # never store/log raw token (Section 10)
     connection.scopes = " ".join(settings.gmail_scopes)
     connection.google_account_email = userinfo["email"]
+    connection.google_subject_id = userinfo["sub"]
+    connection.is_primary = True  # the account used to sign in
     db.commit()
 
     # The callback is opened by the browser, so redirect it to the SPA instead
@@ -145,6 +158,8 @@ def delete_account(response: Response, user: User = Depends(get_current_user), d
     db.query(Notification).filter(Notification.user_id == user.id).delete(synchronize_session=False)
     db.query(ScanRun).filter(ScanRun.user_id == user.id).delete(synchronize_session=False)
     db.query(GmailConnection).filter(GmailConnection.user_id == user.id).delete(synchronize_session=False)
+    db.query(CalendarEvent).filter(CalendarEvent.user_id == user.id).delete(synchronize_session=False)
+    db.query(CalendarConnection).filter(CalendarConnection.user_id == user.id).delete(synchronize_session=False)
     db.delete(user)
     db.commit()
     response.delete_cookie(SESSION_COOKIE_NAME)
@@ -176,7 +191,7 @@ def data_summary(user: User = Depends(get_current_user), db: Session = Depends(g
         tasks=db.query(Task).filter_by(user_id=user.id).count(),
         scans=db.query(ScanRun).filter_by(user_id=user.id).count(),
         notifications=db.query(Notification).filter_by(user_id=user.id).count(),
-        gmail_connected=bool(connection),
+        gmail_connected=bool(user.gmail_connections),
         gmail_scopes=connection.scopes.split() if connection and connection.scopes else [],
     )
 
@@ -194,7 +209,7 @@ def delete_imported_data(user: User = Depends(get_current_user), db: Session = D
     db.query(EmailThread).filter(EmailThread.user_id == user.id).delete(synchronize_session=False)
     db.query(Notification).filter(Notification.user_id == user.id).delete(synchronize_session=False)
     db.query(ScanRun).filter(ScanRun.user_id == user.id).delete(synchronize_session=False)
-    if user.gmail_connection:
-        user.gmail_connection.last_synced_at = None
+    for connection in user.gmail_connections:
+        connection.last_synced_at = None
     db.commit()
     return {"deleted": True}

@@ -22,6 +22,12 @@ class Settings(BaseSettings):
     gmail_scopes: list[str] = ["https://www.googleapis.com/auth/gmail.readonly"]
     gmail_mcp_endpoint: str = "https://gmailmcp.googleapis.com/mcp/v1"
 
+    # Google Calendar (two-way sync for the Today page). Uses the same OAuth
+    # client and redirect URI as sign-in, but a separate, narrower grant.
+    calendar_scopes: list[str] = ["https://www.googleapis.com/auth/calendar.events"]
+    calendar_id: str = "primary"
+    calendar_sync_window_days: int = 30
+
     # LLM — Gemini API (falls back to a rule-based extractor if unset)
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"

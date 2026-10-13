@@ -12,14 +12,15 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.gmail.accounts import scope_connections
 from app.gmail.mime_parser import extract_body_from_payload, parse_header, parse_sender
-from app.gmail.client import GmailClient
+from app.gmail.client import GmailClient, GmailRateLimitError
 from app.ai.llm_extractor import classify_and_extract_llm
 from app.ai.priority import score_task
 from app.ai.dedup import find_duplicate
 from app.ai.dependencies import extract_dependency_phrases
 from app.models import (
-    User, EmailMessage, EmailThread, Task, TaskSource, TaskDependency,
+    User, GmailConnection, EmailMessage, EmailThread, Task, TaskSource, TaskDependency,
     TaskStatus, SourceRelationship,
 )
 from app.security import decrypt_token
@@ -85,24 +86,91 @@ def build_gmail_query(start_date: date | None, end_date: date | None) -> str:
     return settings.default_sync_query
 
 
+def _record_from_row(row: EmailMessage) -> dict:
+    """An already-imported message, shaped like a freshly fetched one."""
+    return {
+        "gmail_message_id": row.gmail_message_id,
+        "gmail_thread_id": row.gmail_thread_id,
+        "internal_date": row.internal_date or datetime.utcfromtimestamp(0),
+        "sender_name": row.sender_name,
+        "sender_email": row.sender_email,
+        "subject": row.subject,
+        "snippet": row.snippet,
+        "normalized_body": row.normalized_body,
+        "has_attachments": row.has_attachments,
+        "labels": row.labels or [],
+    }
+
+
+def _known_records(db: Session, user_id: str, message_ids: list[str]) -> dict[str, dict]:
+    known: dict[str, dict] = {}
+    for start in range(0, len(message_ids), 500):  # stay under SQLite's bound-variable limit
+        rows = (
+            db.query(EmailMessage)
+            .filter(EmailMessage.user_id == user_id, EmailMessage.gmail_message_id.in_(message_ids[start:start + 500]))
+            .all()
+        )
+        known.update({row.gmail_message_id: _record_from_row(row) for row in rows})
+    return known
+
+
 def _normalized_email_records_gmail(
     client: GmailClient, refresh_token: str, query: str, limit: int,
+    load_known: Callable[[list[str]], dict[str, dict]],
     progress_callback: Callable[[str, int, int], None] | None = None,
-) -> list[dict]:
+) -> tuple[list[dict], int]:
+    """Records for every message in the window, plus how many could not be fetched.
+
+    Messages that are already imported are NOT downloaded again: each download
+    costs 20 Gmail quota units against a per-user budget per minute, and thread
+    counts/dates only need what we already stored. If Gmail's rate limit is still
+    hit after backing off, the messages fetched so far are kept (returned) and the
+    rest are counted as unfetched so the scan can be resumed by running it again.
+    """
     refs = client.list_message_ids(query, limit)
-    records = []
+    known = load_known([ref.id for ref in refs])
+    records = [known[ref.id] for ref in refs if ref.id in known]
+    to_fetch = [ref for ref in refs if ref.id not in known]
+    fetched_ids: set[str] = set()
+    rate_limited = threading.Event()  # set by the first worker Gmail rejects; the rest then stand down
+
+    def fetch(ref):
+        if rate_limited.is_set():
+            return None
+        try:
+            return _fetch_one_email(refresh_token, ref)
+        except GmailRateLimitError:
+            rate_limited.set()
+            raise
+
     with ThreadPoolExecutor(max_workers=settings.sync_worker_count) as executor:
-        futures = [executor.submit(_fetch_one_email, refresh_token, ref) for ref in refs]
-        for index, future in enumerate(as_completed(futures), start=1):
-            records.append(future.result())
-            if progress_callback:
-                progress_callback("FETCHING_EMAILS", index, len(refs))
-    return records
+        futures = [executor.submit(fetch, ref) for ref in to_fetch]
+        try:
+            for future in as_completed(futures):
+                record = future.result()
+                if record is None:
+                    continue
+                records.append(record)
+                fetched_ids.add(record["gmail_message_id"])
+                if progress_callback:
+                    progress_callback("FETCHING_EMAILS", len(fetched_ids), len(to_fetch))
+        except GmailRateLimitError:
+            for future in futures:
+                future.cancel()
+    # Workers that were already running when the limit hit may still have succeeded.
+    for future in futures:
+        if future.done() and not future.cancelled() and future.exception() is None:
+            record = future.result()
+            if record is not None and record["gmail_message_id"] not in fetched_ids:
+                records.append(record)
+                fetched_ids.add(record["gmail_message_id"])
+    return records, len(to_fetch) - len(fetched_ids)
 
 
-def run_sync(
+def _sync_connection(
     db: Session,
     user: User,
+    connection: GmailConnection,
     start_date: date | None = None,
     end_date: date | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
@@ -110,20 +178,15 @@ def run_sync(
     started = datetime.utcnow()
 
     # ---- Fetch (FR-02) ----
-    if not user.gmail_connection:
-        raise HTTPException(
-            status_code=400,
-            detail="No Gmail account connected. Sign in with Google (Connect Gmail) before syncing.",
-        )
-
     gmail_query = build_gmail_query(start_date, end_date)
 
-    refresh_token = decrypt_token(user.gmail_connection.encrypted_refresh_token)
+    refresh_token = decrypt_token(connection.encrypted_refresh_token)
     client = GmailClient(refresh_token)
     if progress_callback:
         progress_callback("FETCHING_EMAILS", 0, 0)
-    records = _normalized_email_records_gmail(
-        client, refresh_token, gmail_query, settings.max_messages_per_sync, progress_callback
+    records, messages_unfetched = _normalized_email_records_gmail(
+        client, refresh_token, gmail_query, settings.max_messages_per_sync,
+        lambda ids: _known_records(db, user.id, ids), progress_callback,
     )
 
     messages_fetched = len(records)
@@ -213,6 +276,8 @@ def run_sync(
             normalized_body=r["normalized_body"],
             labels=r["labels"],
             has_attachments=r["has_attachments"],
+            connection_id=connection.id,
+            account_email=connection.google_account_email,
             classification=extraction.classification,
             classification_confidence=extraction.classification_confidence,
             classification_evidence=extraction.classification_evidence,
@@ -325,14 +390,14 @@ def run_sync(
         task.priority_reasons = reasons
     db.commit()
 
-    if user.gmail_connection:
-        user.gmail_connection.last_synced_at = datetime.utcnow()
-        db.commit()
+    connection.last_synced_at = datetime.utcnow()
+    db.commit()
 
     duration_ms = int((datetime.utcnow() - started).total_seconds() * 1000)
     return {
         "messages_fetched": messages_fetched,
         "messages_processed": messages_processed,
+        "messages_unfetched": messages_unfetched,  # > 0 when Gmail's rate limit cut the scan short
         "tasks_created": tasks_created,
         "tasks_updated": tasks_updated,
         "duration_ms": duration_ms,
@@ -340,3 +405,40 @@ def run_sync(
         "end_date": end_date,
         "gmail_query": gmail_query,
     }
+
+
+def run_sync(
+    db: Session,
+    user: User,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    progress_callback: Callable[[str, int, int], None] | None = None,
+    connection_id: str | None = None,
+) -> dict:
+    """Scan the selected Gmail account(s) (or `connection_id`: an id, or "all")."""
+    connections = scope_connections(user, connection_id)
+    if not connections:
+        raise HTTPException(
+            status_code=400,
+            detail="No Gmail account connected. Sign in with Google (Connect Gmail) before syncing.",
+        )
+    if len(connections) == 1:
+        return _sync_connection(db, user, connections[0], start_date, end_date, progress_callback)
+
+    totals: dict | None = None
+    failed: list[str] = []
+    for connection in connections:
+        try:
+            result = _sync_connection(db, user, connection, start_date, end_date, progress_callback)
+        except Exception:  # noqa: BLE001 - one broken account must not stop the others
+            db.rollback()
+            failed.append(connection.label or connection.google_account_email)
+            continue
+        if totals is None:
+            totals = result
+        else:
+            for key in ("messages_fetched", "messages_processed", "messages_unfetched", "tasks_created", "tasks_updated", "duration_ms"):
+                totals[key] = totals.get(key, 0) + result.get(key, 0)
+    if failed:
+        raise RuntimeError(f"Could not scan: {', '.join(failed)}. Reconnect that account and try again.")
+    return totals

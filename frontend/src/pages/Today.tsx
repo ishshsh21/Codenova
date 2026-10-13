@@ -1,6 +1,8 @@
-import { useEffect, useState, useCallback } from 'react';
-import type { DailyAgenda, GmailStatus, ScanRun, Task } from '../types';
-import { getDailyAgenda, getGmailStatus, getMe, getScan, listTasks, syncGmail } from '../api/client';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import type { CalendarEvent, CalendarStatus, DailyAgenda, GmailStatus, ScanRun, Task } from '../types';
+import {
+  connectCalendar, disconnectCalendar, getCalendarStatus, getDailyAgenda, getGmailStatus, getMe, getScan, listTasks, syncCalendar, syncGmail,
+} from '../api/client';
 import StatCard from '../components/StatCard';
 import PriorityBadge from '../components/PriorityBadge';
 import TaskDetailPanel from '../components/TaskDetailPanel';
@@ -23,6 +25,16 @@ function fmtDeadline(iso?: string | null) {
     : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+function fmtClock(iso: string) {
+  return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+// The API returns UTC timestamps without a zone suffix.
+function fmtSyncedAt(iso?: string | null) {
+  if (!iso) return null;
+  return new Date(/[zZ]|[+-]\d\d:\d\d$/.test(iso) ? iso : `${iso}Z`).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
 export default function Today({ workspaceOnly = false }: { workspaceOnly?: boolean }) {
   const [agenda, setAgenda] = useState<DailyAgenda | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -38,6 +50,11 @@ export default function Today({ workspaceOnly = false }: { workspaceOnly?: boole
   const [focusTaskId, setFocusTaskId] = useState<string | null>(null);
   const [lastSync, setLastSync] = useState<ScanRun | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
+  // Google Calendar sync is part of the Today page only (workspaceOnly); Overview never uses it.
+  const [calStatus, setCalStatus] = useState<CalendarStatus | null>(null);
+  const [calEvents, setCalEvents] = useState<CalendarEvent[]>([]);
+  const [calBusy, setCalBusy] = useState(false);
+  const calSyncing = useRef(false);
   const { showToast } = useToast();
 
   const load = useCallback(async () => {
@@ -54,6 +71,99 @@ export default function Today({ workspaceOnly = false }: { workspaceOnly?: boole
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const runCalendarSync = useCallback(async (announce = false) => {
+    if (calSyncing.current) return;
+    calSyncing.current = true;
+    try {
+      const result = await syncCalendar();
+      setCalEvents(result.events);
+      setCalStatus(await getCalendarStatus());
+      if (result.changed) await load();
+      if (result.conflicts.length) {
+        showToast(`${result.conflicts.length} synced task${result.conflicts.length === 1 ? ' overlaps' : 's overlap'} an existing calendar event.`, 'info');
+      }
+      if (announce) {
+        if (result.error) showToast(result.error, 'error');
+        else showToast(result.changed ? 'Calendar synced.' : 'Calendar is up to date.', 'success');
+      }
+    } catch {
+      if (announce) showToast('Could not sync Google Calendar.', 'error');
+    } finally {
+      calSyncing.current = false;
+    }
+  }, [load, showToast]);
+
+  useEffect(() => {
+    if (!workspaceOnly) return;
+    const params = new URLSearchParams(window.location.search);
+    const outcome = params.get('calendar');
+    if (!outcome) return;
+    params.delete('calendar');
+    window.history.replaceState({}, '', window.location.pathname + (params.toString() ? `?${params}` : ''));
+    if (outcome === 'connected') showToast('Google Calendar connected.', 'success');
+    else if (outcome === 'denied') showToast('Google Calendar was not connected: calendar access is needed to sync.', 'error');
+    else showToast('Could not connect Google Calendar. Please try again.', 'error');
+  }, [workspaceOnly, showToast]);
+
+  useEffect(() => {
+    if (!workspaceOnly) return;
+    let cancelled = false;
+    getCalendarStatus().then((status) => {
+      if (cancelled) return;
+      setCalStatus(status);
+      if (status.connected && !status.needs_reauth) void runCalendarSync();
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [workspaceOnly, runCalendarSync]);
+
+  const calendarLive = workspaceOnly && Boolean(calStatus?.connected) && !calStatus?.needs_reauth;
+  useEffect(() => {
+    if (!calendarLive) return;
+    const refresh = () => { if (document.visibilityState === 'visible') void runCalendarSync(); };
+    const timer = window.setInterval(refresh, 60000);
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('calendar-changed', refresh); // fired by the AI assistant after it edits the calendar
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('calendar-changed', refresh);
+    };
+  }, [calendarLive, runCalendarSync]);
+
+  // A finished Gmail scan may have created tasks that should reach the calendar.
+  const lastScanId = lastSync?.id;
+  useEffect(() => { if (calendarLive && lastScanId) void runCalendarSync(); }, [calendarLive, lastScanId, runCalendarSync]);
+
+  const handleConnectCalendar = async () => {
+    setCalBusy(true);
+    try {
+      window.location.href = (await connectCalendar()).authorization_url;
+    } catch (err) {
+      setCalBusy(false);
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      showToast(detail || 'Could not start Google Calendar sign-in.', 'error');
+    }
+  };
+
+  const handleDisconnectCalendar = async () => {
+    if (!window.confirm('Disconnect Google Calendar? Events already in Google Calendar stay there; Today stops syncing.')) return;
+    try {
+      await disconnectCalendar();
+      setCalStatus({ connected: false, needs_reauth: false });
+      setCalEvents([]);
+      await load();
+      showToast('Google Calendar disconnected.', 'info');
+    } catch {
+      showToast('Could not disconnect Google Calendar.', 'error');
+    }
+  };
+
+  const handleCalendarSyncNow = async () => {
+    setCalBusy(true);
+    await runCalendarSync(true);
+    setCalBusy(false);
+  };
 
   useEffect(() => {
     if (!activeScanId) return;
@@ -116,6 +226,9 @@ export default function Today({ workspaceOnly = false }: { workspaceOnly?: boole
     const matchesKpi = kpiFilter === 'ALL' || (kpiFilter === 'CRITICAL' && task.priority === 'P0') || (kpiFilter === 'DUE_TODAY' && isDueToday) || (kpiFilter === 'OVERDUE' && isOverdue) || (kpiFilter === 'THIS_WEEK' && isThisWeek) || (kpiFilter === 'NO_ACTION' && false);
     return matchesText && matchesPriority && matchesKpi;
   }) : [];
+  const visibleEvents = workspaceOnly && priorityFilter === 'ALL' && kpiFilter === 'ALL'
+    ? calEvents.filter((event) => !taskFilter.trim() || event.title.toLowerCase().includes(taskFilter.toLowerCase()))
+    : [];
   const focusTasks = agenda?.timeline.slice(0, 3) ?? [];
   const nextUpTask = agenda?.timeline[0] ?? null;
   // "Next Up" is the first scheduled item. By default, "Focus" should show
@@ -146,6 +259,31 @@ export default function Today({ workspaceOnly = false }: { workspaceOnly?: boole
       </div>
 
       {syncError && <div className="sync-error-banner">{syncError}</div>}
+
+      {workspaceOnly && calStatus && (
+        <div className="calendar-sync-bar">
+          <div className="calendar-sync-info">
+            <strong>Google Calendar</strong>
+            {!calStatus.connected && <span>Sync today's tasks and events with Google Calendar, both ways.</span>}
+            {calStatus.connected && !calStatus.needs_reauth && (
+              <span>Synced with {calStatus.google_account_email}{fmtSyncedAt(calStatus.last_synced_at) && <> · {fmtSyncedAt(calStatus.last_synced_at)}</>}</span>
+            )}
+            {calStatus.connected && calStatus.needs_reauth && <span className="calendar-sync-warn">Access expired or was revoked. Reconnect to resume syncing.</span>}
+          </div>
+          <div className="calendar-sync-actions">
+            {(!calStatus.connected || calStatus.needs_reauth) ? (
+              <button className="btn-primary" onClick={handleConnectCalendar} disabled={calBusy}>
+                {calBusy ? 'Opening Google…' : calStatus.needs_reauth ? 'Reconnect Calendar' : 'Connect Calendar'}
+              </button>
+            ) : (
+              <>
+                <button className="btn-secondary" onClick={handleCalendarSyncNow} disabled={calBusy}>{calBusy ? 'Syncing…' : 'Sync now'}</button>
+                <button className="btn-ghost" onClick={handleDisconnectCalendar}>Disconnect</button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {activeScan && activeScanId && (
         <div className="scan-progress-card">
@@ -206,12 +344,37 @@ export default function Today({ workspaceOnly = false }: { workspaceOnly?: boole
             <option value="ALL">All priorities</option><option value="P0">P0 critical</option><option value="P1">P1 high</option><option value="P2">P2 medium</option><option value="P3">P3 low</option><option value="P4">P4 info</option>
           </select>
         </div>
-        {agenda && agenda.timeline.length === 0 && (
+        {agenda && agenda.timeline.length === 0 && visibleEvents.length === 0 && (
           <div className="empty-state">
             Nothing urgent on the board. Sync Gmail to pull in the latest signal.
           </div>
         )}
         <div className="timeline">
+          {visibleEvents.map((event) => (
+            <a
+              key={`event-${event.id}`}
+              className="timeline-row calendar-event-row"
+              href={event.html_link || undefined}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open in Google Calendar"
+            >
+              <span className="timeline-time">{event.all_day ? 'All day' : fmtClock(event.start)}</span>
+              <span className="timeline-rail rail-EVENT" aria-hidden="true" />
+              <div className="timeline-body">
+                <div className="timeline-top">
+                  <span className="timeline-title">{event.title}</span>
+                  <span className="calendar-chip">Calendar</span>
+                </div>
+                <div className="timeline-bottom">
+                  <span className="timeline-reason">
+                    {event.all_day ? 'All-day event' : `${fmtClock(event.start)} – ${fmtClock(event.end)}`}{event.location ? ` · ${event.location}` : ''}
+                  </span>
+                </div>
+              </div>
+              <span className="timeline-deadline">{event.all_day ? '—' : fmtClock(event.end)}</span>
+            </a>
+          ))}
           {visibleTimeline?.map((t) => (
             <button key={t.id} className="timeline-row" onClick={() => openTask(t.id)}>
               <span className="timeline-time">{fmtTime(fmtDeadline(t.deadline))}</span>
@@ -220,6 +383,7 @@ export default function Today({ workspaceOnly = false }: { workspaceOnly?: boole
                 <div className="timeline-top">
                   <span className="timeline-title">{t.title}</span>
                   {t.is_blocking && <span className="blocking-chip">blocks work</span>}
+                  {workspaceOnly && t.calendar_synced && <span className="calendar-chip" title="Synced with Google Calendar">Synced</span>}
                 </div>
                 <div className="timeline-bottom">
                   <PriorityBadge priority={t.priority} />

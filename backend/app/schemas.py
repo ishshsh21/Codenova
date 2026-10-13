@@ -32,6 +32,7 @@ class SyncRequestIn(BaseModel):
     send an empty body) to fall back to the default `newer_than:30d` scan."""
     start_date: Optional[date] = None
     end_date: Optional[date] = None
+    account_id: Optional[str] = None  # a connected account's id, or "all"; default: the selected account
 
     @model_validator(mode="after")
     def _validate_range(self):
@@ -72,6 +73,9 @@ class ScanOut(ScanStartOut):
     stage: str
     progress: int
     progress_total: int
+    connection_id: Optional[str] = None
+    account_email: Optional[str] = None
+    account_label: Optional[str] = None
 
 
 class NotificationOut(BaseModel):
@@ -122,6 +126,7 @@ class TaskOut(BaseModel):
     snoozed_until: Optional[datetime] = None
     depends_on: list[str] = []
     sources: list[TaskSourceOut] = []
+    calendar_synced: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -205,3 +210,70 @@ class AssistantChatIn(BaseModel):
 class AssistantChatOut(BaseModel):
     message: str
     action_taken: Optional[str] = None
+
+
+# ---------- Google Calendar (Today) ----------
+
+class CalendarStatusOut(BaseModel):
+    connected: bool
+    google_account_email: Optional[str] = None
+    last_synced_at: Optional[datetime] = None
+    needs_reauth: bool = False
+    error: Optional[str] = None
+
+
+class CalendarEventOut(BaseModel):
+    id: str
+    title: str
+    start: datetime
+    end: datetime
+    all_day: bool
+    location: str = ""
+    html_link: str = ""
+    origin: str
+
+
+class CalendarConflictOut(BaseModel):
+    task_id: str
+    title: str
+    conflicts_with: list[dict[str, Any]]
+
+
+class CalendarSyncOut(BaseModel):
+    connected: bool
+    changed: bool = False
+    created: int = 0
+    updated: int = 0
+    deleted: int = 0
+    pulled: int = 0
+    conflicts: list[CalendarConflictOut] = []
+    error: Optional[str] = None
+    needs_reauth: bool = False
+    events: list[CalendarEventOut] = []
+
+
+# ---------- Multiple Gmail accounts ----------
+
+class GmailAccountOut(BaseModel):
+    id: str
+    email: str
+    label: str = ""
+    is_primary: bool = False
+    last_synced_at: Optional[datetime] = None
+
+
+class GmailAccountsOut(BaseModel):
+    accounts: list[GmailAccountOut]
+    selected: str  # a connection id, or "all"
+
+
+class GmailAccountConnectIn(BaseModel):
+    label: str = Field(default="", max_length=60)
+
+
+class GmailAccountUpdateIn(BaseModel):
+    label: str = Field(max_length=60)
+
+
+class GmailAccountSelectIn(BaseModel):
+    account_id: str  # a connection id, or "all"

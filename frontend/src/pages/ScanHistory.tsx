@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Notification, ScanRun } from '../types';
-import { deleteAccount, deleteScan, getNotifications, getScans, rerunScan } from '../api/client';
+import { deleteAccount, deleteScan, getGmailAccounts, getNotifications, getScans, rerunScan } from '../api/client';
+import { ACCOUNT_CHANGED_EVENT } from '../components/gmailAccounts';
+import type { GmailAccounts } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '../components/Toast';
 
@@ -21,6 +23,7 @@ function formatDateTime(value?: string | null) {
 export default function ScanHistory() {
   const [scans, setScans] = useState<ScanRun[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [accounts, setAccounts] = useState<GmailAccounts | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
@@ -28,7 +31,8 @@ export default function ScanHistory() {
   const previousStatuses = useRef(new Map<string, string>());
 
   const load = useCallback(async () => {
-    const [scanData, notificationData] = await Promise.all([getScans(), getNotifications()]);
+    const [scanData, notificationData, accountData] = await Promise.all([getScans(), getNotifications(), getGmailAccounts().catch(() => null)]);
+    setAccounts(accountData);
     scanData.forEach((scan) => {
       const previous = previousStatuses.current.get(scan.id);
       if (previous && previous !== scan.status && scan.status === 'COMPLETED') {
@@ -46,6 +50,13 @@ export default function ScanHistory() {
     load()
       .catch(() => setError('Could not load scan history. Check that the backend is running.'))
       .finally(() => setLoading(false));
+  }, [load]);
+
+  // The account menu switches which Gmail account this page shows.
+  useEffect(() => {
+    const reload = () => { load().catch(() => undefined); };
+    window.addEventListener(ACCOUNT_CHANGED_EVENT, reload);
+    return () => window.removeEventListener(ACCOUNT_CHANGED_EVENT, reload);
   }, [load]);
 
   useEffect(() => {
@@ -89,12 +100,19 @@ export default function ScanHistory() {
     }
   };
 
+  const multiAccount = (accounts?.accounts.length ?? 0) > 1;
+  const selectedAccount = accounts?.accounts.find((account) => account.id === accounts.selected);
+  const showingAccount = multiAccount ? (selectedAccount ? selectedAccount.label || selectedAccount.email : 'all accounts') : null;
+
   return (
     <div className="page">
       <div className="page-header">
         <div>
           <h1>Scan History</h1>
-          <p className="page-sub">Every Gmail scan stays attached to your account.</p>
+          <p className="page-sub">
+            Every Gmail scan stays attached to your account.
+            {showingAccount && <> Showing {showingAccount}.</>}
+          </p>
         </div>
       </div>
 
@@ -109,6 +127,7 @@ export default function ScanHistory() {
               <div className="scan-card-top">
                 <div>
                   <span className={`scan-status scan-status-${scan.status.toLowerCase()}`}>{scan.status}</span>
+                  {multiAccount && <span className="scan-account">{scan.connection_id ? scan.account_label || scan.account_email || 'Removed account' : 'All accounts'}</span>}
                   <h2>{formatDate(scan.start_date)}{scan.end_date ? ` → ${formatDate(scan.end_date)}` : ''}</h2>
                 </div>
                 <time>{formatDateTime(scan.created_at)}</time>

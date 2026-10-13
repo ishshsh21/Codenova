@@ -624,3 +624,34 @@
 /* ---------- Authenticated account menu ---------- */
 .account-menu { position: relative; }.account-menu-trigger { display: flex; align-items: center; gap: 14px; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }.account-menu-trigger .profile-chevron { margin-left: 0; }.account-menu-trigger:focus-visible { outline: 2px solid var(--signal-p2); outline-offset: 4px; border-radius: 7px; }
 .account-menu-popover { position: absolute; top: calc(100% + 14px); right: 0; z-index: 45; width: 270px; padding: 8px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg-surface-raised); box-shadow: var(--shadow-card); }.account-menu-account { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px; border: 0; border-radius: 7px; color: var(--text-primary); background: transparent; text-align: left; cursor: pointer; font: inherit; }.account-menu-account:hover { background: rgba(255,255,255,.04); }.account-menu-account > span:nth-child(2) { min-width: 0; flex: 1; }.account-menu-account strong, .account-menu-account small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.account-menu-account strong { font-size: 13px; }.account-menu-account small { margin-top: 3px; color: var(--text-secondary); font-size: 11px; }.account-menu-account b { color: var(--success); font-size: 15px; }.account-menu-divider { height: 1px; margin: 6px 0; background: var(--border-hair); }.account-menu-signout { width: 100%; padding: 9px 10px; border: 0; border-radius: 7px; color: var(--text-secondary); background: transparent; text-align: left; cursor: pointer; font: 13px var(--font-body); }.account-menu-signout:hover { color: var(--text-primary); background: rgba(255,255,255,.04); }
+
+/* ---------- Google Calendar sync (Today page) ---------- */
+.rail-EVENT { background: #4C8DFF; }
+a.timeline-row { text-decoration: none; }
+.calendar-chip { padding: 2px 7px; border: 1px solid rgba(76,141,255,.3); border-radius: 5px; color: #7FB0FF; background: rgba(76,141,255,.12); font: 10px var(--font-mono); white-space: nowrap; }
+.calendar-sync-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0 0 20px; padding: 14px 18px; border: 1px solid var(--border-hair); border-radius: 11px; background: var(--bg-surface); }
+.calendar-sync-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.calendar-sync-info strong { font-size: 13px; }
+.calendar-sync-info span { color: var(--text-muted); font-size: 12px; }
+.calendar-sync-info .calendar-sync-warn { color: var(--signal-p1); }
+.calendar-sync-actions { display: flex; flex-shrink: 0; gap: 8px; }
+@media (max-width: 700px) { .calendar-sync-bar { flex-direction: column; align-items: flex-start; } }
+
+/* ---------- Gmail accounts (account menu, scan history) ---------- */
+.account-menu-section { padding: 8px 10px 4px; color: var(--text-muted); font: 10px var(--font-mono); letter-spacing: .06em; text-transform: uppercase; }
+.account-menu-row { display: flex; align-items: center; gap: 2px; }
+.account-menu-row .account-menu-account { flex: 1; min-width: 0; }
+.account-menu-row .account-menu-account b { margin-left: auto; }
+.account-menu-tool { padding: 6px 7px; border: 0; border-radius: 6px; color: var(--text-muted); background: transparent; cursor: pointer; font-size: 13px; line-height: 1; }
+.account-menu-tool:hover { color: var(--text-primary); background: rgba(255,255,255,.05); }
+.account-menu-add { width: 100%; padding: 9px 10px; border: 0; border-radius: 7px; color: var(--text-secondary); background: transparent; text-align: left; cursor: pointer; font: 13px var(--font-body); }
+.account-menu-add:hover { color: var(--text-primary); background: rgba(255,255,255,.04); }
+.account-form { display: flex; flex-direction: column; gap: 8px; padding: 6px 10px 10px; }
+.account-form label { display: flex; flex-direction: column; gap: 5px; color: var(--text-muted); font: 11px var(--font-body); }
+.account-form select, .account-form input { padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 7px; color: var(--text-primary); background: var(--bg-surface); font: 13px var(--font-body); }
+.account-form select:focus, .account-form input:focus { outline: none; border-color: var(--signal-p2); }
+.account-form-actions { display: flex; gap: 8px; }
+.account-form-actions .btn-primary, .account-form-actions .btn-ghost { padding: 7px 12px; font-size: 12px; }
+.account-form-note { margin: 0; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.account-label-chip { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 8px; color: #B6A7FF; background: rgba(124,92,255,.16); font: 10px var(--font-mono); vertical-align: middle; }
+.scan-account { display: inline-block; margin-left: 8px; color: var(--text-muted); font: 11px var(--font-mono); }

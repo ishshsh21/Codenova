@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Task, TaskSource, EmailMessage, TaskDependency, TaskFeedback, TaskStatus, User
 from app.security import get_current_user
+from app.gcal.sync import sync_task_safe
 from app.schemas import TaskOut, TaskUpdateIn, TaskFeedbackIn, TaskSourceOut
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
@@ -31,11 +32,12 @@ def _to_task_out(db: Session, task: Task) -> TaskOut:
         ]},
         priority_reasons=task.priority_reasons or [],
         depends_on=[d.depends_on_task_id for d in deps],
+        calendar_synced=bool(task.calendar_event_id and task.status == TaskStatus.OPEN.value and task.deadline),
         sources=[
             TaskSourceOut(
                 message_id=m.id, gmail_thread_id=m.gmail_thread_id,
                 internal_date=m.internal_date,
-                gmail_url=f"https://mail.google.com/mail/u/0/#all/{m.gmail_thread_id}",
+                gmail_url=f"https://mail.google.com/mail/u/{m.account_email or 0}/#all/{m.gmail_thread_id}",
                 subject=m.subject,
                 sender_name=m.sender_name, sender_email=m.sender_email, snippet=m.snippet,
                 relationship_type=ts.relationship_type,
@@ -76,6 +78,7 @@ def create_task(payload: TaskUpdateIn, user: User = Depends(get_current_user), d
     db.add(task)
     db.commit()
     db.refresh(task)
+    sync_task_safe(db, user, task)
     return _to_task_out(db, task)
 
 
@@ -93,6 +96,7 @@ def update_task(task_id: str, payload: TaskUpdateIn, user: User = Depends(get_cu
     task.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(task)
+    sync_task_safe(db, user, task)
     return _to_task_out(db, task)
 
 
@@ -106,6 +110,7 @@ def complete_task(task_id: str, user: User = Depends(get_current_user), db: Sess
     db.add(TaskFeedback(task_id=task.id, user_id=user.id, feedback_type="complete"))
     db.commit()
     db.refresh(task)
+    sync_task_safe(db, user, task)
     return _to_task_out(db, task)
 
 
@@ -118,6 +123,7 @@ def dismiss_task(task_id: str, user: User = Depends(get_current_user), db: Sessi
     db.add(TaskFeedback(task_id=task.id, user_id=user.id, feedback_type="dismiss"))
     db.commit()
     db.refresh(task)
+    sync_task_safe(db, user, task)
     return _to_task_out(db, task)
 
 
@@ -140,4 +146,5 @@ def submit_feedback(task_id: str, payload: TaskFeedbackIn, user: User = Depends(
     db.add(TaskFeedback(task_id=task.id, user_id=user.id, feedback_type=payload.feedback_type,
                          new_value=payload.new_value))
     db.commit()
+    sync_task_safe(db, user, task)
     return {"ok": True}

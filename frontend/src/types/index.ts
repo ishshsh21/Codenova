@@ -32,6 +32,9 @@ export interface ScanRun {
   stage: string;
   progress: number;
   progress_total: number;
+  connection_id?: string | null;
+  account_email?: string | null;
+  account_label?: string | null;
   error_message?: string | null;
   created_at: string;
   started_at?: string | null;
@@ -108,6 +111,7 @@ export interface Task {
   snoozed_until?: string | null;
   depends_on: string[];
   sources: TaskSource[];
+  calendar_synced?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -165,4 +169,51 @@ export interface AssistantMessage {
 export interface AssistantChatResponse {
   message: string;
   action_taken?: string | null;
+}
+
+// ---- Google Calendar (Today) ----
+export interface CalendarStatus {
+  connected: boolean;
+  google_account_email?: string | null;
+  last_synced_at?: string | null;
+  needs_reauth: boolean;
+  error?: string | null;
+}
+
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  all_day: boolean;
+  location: string;
+  html_link: string;
+  origin: string;
+}
+
+export interface CalendarSyncResult {
+  connected: boolean;
+  changed: boolean;
+  created: number;
+  updated: number;
+  deleted: number;
+  pulled: number;
+  conflicts: { task_id: string; title: string; conflicts_with: { title: string }[] }[];
+  error?: string | null;
+  needs_reauth: boolean;
+  events: CalendarEvent[];
+}
+
+// ---- Multiple Gmail accounts ----
+export interface GmailAccount {
+  id: string;
+  email: string;
+  label: string;
+  is_primary: boolean;
+  last_synced_at?: string | null;
+}
+
+export interface GmailAccounts {
+  accounts: GmailAccount[];
+  selected: string; // an account id, or "all"
 }

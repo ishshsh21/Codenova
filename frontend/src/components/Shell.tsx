@@ -4,6 +4,9 @@ import type { User } from '../types';
 import { logout } from '../api/client';
 import NotificationCenter from './NotificationCenter';
 import AIAssistant from './AIAssistant';
+import GmailAccountMenu from './GmailAccountMenu';
+import { ACCOUNT_CHANGED_EVENT, selectedAccountName, useGmailAccounts } from './gmailAccounts';
+import { useToast } from './Toast';
 
 type IconName = 'signal' | 'overview' | 'today' | 'week' | 'scan' | 'insights' | 'settings' | 'sparkle';
 
@@ -28,6 +31,18 @@ function SidebarLink({ to, icon, children, end = false, forceInactive = false }:
 export default function Shell({ user, children }: { user: User | null; children: React.ReactNode }) {
   const navigate = useNavigate(); const [assistantOpen, setAssistantOpen] = useState(false); const [accountMenuOpen, setAccountMenuOpen] = useState(false); const accountMenuRef = useRef<HTMLDivElement>(null);
   const handleLogout = async () => { await logout(); navigate('/login'); };
+  const { data: accounts, setData: setAccounts, refresh: refreshAccounts } = useGmailAccounts(); const { showToast } = useToast();
+  useEffect(() => {
+    // Coming back from Google after "Add Gmail account".
+    const params = new URLSearchParams(window.location.search); const outcome = params.get('gmail_account');
+    if (!outcome) return;
+    params.delete('gmail_account'); window.history.replaceState({}, '', window.location.pathname + (params.toString() ? `?${params}` : ''));
+    if (outcome === 'added') showToast('Gmail account connected. Use “Sync Gmail” to scan it.', 'success');
+    else if (outcome === 'updated') showToast('Gmail account reconnected.', 'success');
+    else if (outcome === 'denied') showToast('Gmail account was not connected: read-only Gmail access is required.', 'error');
+    else showToast('Could not connect that Gmail account. Please try again.', 'error');
+    refreshAccounts(); window.dispatchEvent(new Event(ACCOUNT_CHANGED_EVENT));
+  }, [showToast, refreshAccounts]);
   useEffect(() => {
     const closeOnOutsideClick = (event: MouseEvent) => { if (accountMenuRef.current && !accountMenuRef.current.contains(event.target as Node)) setAccountMenuOpen(false); };
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setAccountMenuOpen(false); };
@@ -43,6 +58,6 @@ export default function Shell({ user, children }: { user: User | null; children:
       </nav>
       <div className="sidebar-bottom"><section className="assistant-card"><button className="assistant-launch" onClick={() => setAssistantOpen(true)}><div className="assistant-heading"><span className="assistant-icon"><Icon name="sparkle" /></span><div><strong>AI Assistant</strong><small><i /> Online</small></div></div><span className="assistant-prompt">Ask about your workday... <b>→</b></span></button></section>{user && <button className="sidebar-profile" title="Sign out" onClick={handleLogout}><span className="user-avatar">{user.name?.[0] ?? 'U'}</span><span className="user-meta"><strong>{user.name}</strong><small>{user.email}</small></span><span className="profile-chevron">⌄</span></button>}</div>
     </aside>
-    <section className="main-shell"><header className="main-topbar"><div className="topbar-user">{user && <><NotificationCenter /><span className="topbar-divider" /><div className="account-menu" ref={accountMenuRef}><button className="account-menu-trigger" onClick={() => setAccountMenuOpen((open) => !open)} aria-expanded={accountMenuOpen} aria-haspopup="menu"><span className="user-avatar">{user.name?.[0] ?? 'U'}</span><span className="user-meta"><strong>{user.name}</strong><small>{user.email}</small></span><span className="profile-chevron">⌄</span></button>{accountMenuOpen && <div className="account-menu-popover" role="menu"><button className="account-menu-account" role="menuitem" onClick={() => setAccountMenuOpen(false)}><span className="user-avatar">{user.name?.[0] ?? 'U'}</span><span><strong>{user.name}</strong><small>{user.email}</small></span><b>✓</b></button><div className="account-menu-divider" /><button className="account-menu-signout" role="menuitem" onClick={handleLogout}>Sign out</button></div>}</div></>}</div></header><main className="content">{children}</main></section><AIAssistant open={assistantOpen} onClose={() => setAssistantOpen(false)} />
+    <section className="main-shell"><header className="main-topbar"><div className="topbar-user">{user && <><NotificationCenter /><span className="topbar-divider" /><div className="account-menu" ref={accountMenuRef}><button className="account-menu-trigger" onClick={() => setAccountMenuOpen((open) => !open)} aria-expanded={accountMenuOpen} aria-haspopup="menu"><span className="user-avatar">{user.name?.[0] ?? 'U'}</span><span className="user-meta"><strong>{user.name}</strong><small>{selectedAccountName(accounts) ?? user.email}</small></span><span className="profile-chevron">⌄</span></button>{accountMenuOpen && <div className="account-menu-popover" role="menu">{accounts ? <GmailAccountMenu data={accounts} setData={setAccounts} onClose={() => setAccountMenuOpen(false)} /> : <button className="account-menu-account" role="menuitem" onClick={() => setAccountMenuOpen(false)}><span className="user-avatar">{user.name?.[0] ?? 'U'}</span><span><strong>{user.name}</strong><small>{user.email}</small></span><b>✓</b></button>}<div className="account-menu-divider" /><button className="account-menu-signout" role="menuitem" onClick={handleLogout}>Sign out</button></div>}</div></>}</div></header><main className="content">{children}</main></section><AIAssistant open={assistantOpen} onClose={() => setAssistantOpen(false)} />
   </div>;
 }

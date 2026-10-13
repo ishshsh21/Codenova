@@ -16,7 +16,7 @@ export default function AIAssistant({ open, onClose }: { open: boolean; onClose:
     if (!content || thinking) return;
     const nextHistory = [...messages, { role: 'user' as const, content }];
     setMessages(nextHistory); setInput(''); setThinking(true);
-    try { const response = await chatWithAssistant(content, messages); setMessages([...nextHistory, { role: 'assistant', content: response.message }]); }
+    try { const response = await chatWithAssistant(content, messages); setMessages([...nextHistory, { role: 'assistant', content: response.message }]); if (response.action_taken?.startsWith('calendar_')) window.dispatchEvent(new Event('calendar-changed')); }
     catch { setMessages([...nextHistory, { role: 'assistant', content: "Sorry, I couldn't process that request right now. Please try again." }]); }
     finally { setThinking(false); }
   };

@@ -69,6 +69,31 @@ and organizes tasks into a daily and weekly agenda.
 - Compact link labels opening in a new tab.
 - Open original email thread in Gmail.
 
+### Google Calendar (Today page)
+
+- "Connect Calendar" (separate `calendar.events` grant); disconnect any time.
+- Two-way sync: tasks with a deadline become events (start = deadline, length = estimated effort);
+  creating, renaming, rescheduling, completing or dismissing a task updates its event.
+- Events created, moved or deleted in Google Calendar show up on Today within a minute.
+  Deleting a synced event dismisses its task (you get a notification).
+- The Calendar event ID is stored on each task, so a task can never create a second event.
+- Overlaps with existing events are reported when syncing and checked before the assistant schedules.
+- Only the Today page uses Calendar; Overview and This Week are unchanged.
+
+### Multiple Gmail accounts
+
+- Connect several Google accounts, each with its own encrypted read-only token.
+- Label accounts (School, Personal, Work, or your own) and switch from the account menu.
+- The selected account (or **All accounts**) controls which Gmail is scanned, searched and shown in Scan History.
+- Tasks from every account still appear everywhere in the app.
+
+### AI assistant
+
+- Searches and reads your email (read-only) to pull out assignments, deadlines and details.
+- Creates, updates and deletes Calendar events when asked, checking for conflicts first.
+- Safety: events are only changed when your message asks for it; update/delete are blocked in a
+  turn that read email; events never invite anyone.
+
 ### Settings
 
 - Timezone and workday hours.
@@ -105,6 +130,10 @@ and organizes tasks into a daily and weekly agenda.
 - `GET /api/tasks` - List and filter tasks.
 - `GET /api/tasks/{task_id}` - Read task details and source emails.
 - `PATCH /api/tasks/{task_id}` - Edit task fields.
+- `GET /api/calendar/status`, `POST /api/calendar/connect`, `POST /api/calendar/sync`,
+  `GET /api/calendar/events`, `DELETE /api/calendar/disconnect` - Google Calendar.
+- `GET /api/gmail/accounts`, `POST /api/gmail/accounts/connect`, `PUT /api/gmail/accounts/selected`,
+  `PATCH|DELETE /api/gmail/accounts/{id}` - Multiple Gmail accounts.
 
 ## Local Development
 
@@ -113,7 +142,7 @@ Start the backend:
 ```bash
 cd backend
 source .venv/bin/activate
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --reload-dir app --port 8000
 ```
 
 Start the frontend in another terminal:

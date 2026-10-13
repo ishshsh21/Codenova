@@ -88,10 +88,23 @@ class User(Base):
     notify_scan_completion: Mapped[bool] = mapped_column(Boolean, default=True)
     vip_senders: Mapped[list] = mapped_column(JSON, default=list)
     ignored_senders: Mapped[list] = mapped_column(JSON, default=list)
+    # Which connected Gmail account the Gmail section shows/searches: a
+    # GmailConnection.id, or NULL / "all" for every connected account.
+    selected_gmail_account: Mapped[str] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    gmail_connection: Mapped["GmailConnection"] = relationship(back_populates="user", uselist=False)
+    gmail_connections: Mapped[list["GmailConnection"]] = relationship(
+        back_populates="user", order_by="GmailConnection.created_at"
+    )
+    calendar_connection: Mapped["CalendarConnection"] = relationship(back_populates="user", uselist=False)
+
+    @property
+    def gmail_connection(self) -> "GmailConnection | None":
+        """The sign-in (primary) Gmail account. Kept so single-account code paths
+        keep working now that a user can connect several accounts."""
+        connections = self.gmail_connections
+        return next((c for c in connections if c.is_primary), connections[0] if connections else None)
 
 
 class GmailConnection(Base):
@@ -105,10 +118,55 @@ class GmailConnection(Base):
     watch_history_id: Mapped[str] = mapped_column(String, nullable=True)
     watch_expiration: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     last_synced_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    # Multi-account: each connection carries its own refresh token, so every
+    # account is authenticated (and can be revoked) separately.
+    label: Mapped[str] = mapped_column(String, default="")
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
+    google_subject_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    user: Mapped["User"] = relationship(back_populates="gmail_connection")
+    user: Mapped["User"] = relationship(back_populates="gmail_connections")
+
+
+class CalendarConnection(Base):
+    """A user's Google Calendar grant, kept separate from the Gmail grant."""
+    __tablename__ = "calendar_connections"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), unique=True, index=True)
+    google_account_email: Mapped[str] = mapped_column(String)
+    google_subject_id: Mapped[str] = mapped_column(String, nullable=True)
+    encrypted_refresh_token: Mapped[str] = mapped_column(Text)
+    scopes: Mapped[str] = mapped_column(Text, default="")
+    needs_reauth: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_error: Mapped[str] = mapped_column(Text, nullable=True)
+    last_synced_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="calendar_connection")
+
+
+class CalendarEvent(Base):
+    """Cache of Google Calendar events that are NOT linked to a task. Events
+    linked to a task are represented by the task itself (Task.calendar_event_id)."""
+    __tablename__ = "calendar_events"
+    __table_args__ = (UniqueConstraint("user_id", "google_event_id"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=gen_uuid)
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), index=True)
+    google_event_id: Mapped[str] = mapped_column(String, index=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    location: Mapped[str] = mapped_column(Text, default="")
+    html_link: Mapped[str] = mapped_column(Text, default="")
+    # Wall-clock time in the user's timezone (same convention as Task.deadline).
+    start_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    end_at: Mapped[datetime] = mapped_column(DateTime)
+    all_day: Mapped[bool] = mapped_column(Boolean, default=False)
+    origin: Mapped[str] = mapped_column(String, default="GOOGLE")  # GOOGLE | ASSISTANT
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class ScanRun(Base):
@@ -133,6 +191,8 @@ class ScanRun(Base):
     stage: Mapped[str] = mapped_column(String, default="QUEUED")
     progress: Mapped[int] = mapped_column(Integer, default=0)
     progress_total: Mapped[int] = mapped_column(Integer, default=0)
+    # Gmail account this scan covered; NULL means every connected account.
+    connection_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
 
 
 class Notification(Base):
@@ -187,6 +247,11 @@ class EmailMessage(Base):
     classification_evidence: Mapped[str] = mapped_column(Text, default="")
     processing_status: Mapped[str] = mapped_column(String, default="PENDING")  # PENDING | PROCESSED | FAILED
 
+    # Which connected Gmail account this message came from. account_email is
+    # kept alongside so links keep working after an account is removed.
+    connection_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
+    account_email: Mapped[str] = mapped_column(String, default="")
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -218,6 +283,13 @@ class Task(Base):
     is_blocking: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str] = mapped_column(Text, default="")
     snoozed_until: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+
+    # Google Calendar link. The event ID is stored so a task can never produce a
+    # second event; etag/hash let the sync tell which side changed since last time.
+    calendar_event_id: Mapped[str] = mapped_column(String, nullable=True, index=True)
+    calendar_etag: Mapped[str] = mapped_column(String, nullable=True)
+    calendar_hash: Mapped[str] = mapped_column(String, nullable=True)
+    calendar_synced_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

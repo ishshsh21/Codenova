@@ -1,6 +1,7 @@
 import axios from 'axios';
 import type {
   User, GmailStatus, ScanRun, ScanStart, SyncRequest, Task, DailyAgenda, WeeklyAgenda, FollowUpAlert, Notification, DataSummary, AssistantMessage, AssistantChatResponse,
+  CalendarStatus, CalendarEvent, CalendarSyncResult, GmailAccounts, GmailAccount,
 } from '../types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
@@ -146,4 +147,54 @@ export const chatWithAssistant = async (message: string, history: AssistantMessa
 export const search = async (q: string): Promise<{ tasks: Partial<Task>[]; emails: unknown[] }> => {
   const { data } = await api.get('/api/search', { params: { q } });
   return data;
+};
+
+// ---- Google Calendar (Today) ----
+export const getCalendarStatus = async (): Promise<CalendarStatus> => {
+  const { data } = await api.get('/api/calendar/status');
+  return data;
+};
+
+export const connectCalendar = async (): Promise<{ authorization_url: string }> => {
+  const { data } = await api.post('/api/calendar/connect');
+  return data;
+};
+
+export const disconnectCalendar = async (): Promise<void> => {
+  await api.delete('/api/calendar/disconnect');
+};
+
+export const syncCalendar = async (): Promise<CalendarSyncResult> => {
+  const { data } = await api.post('/api/calendar/sync');
+  return data;
+};
+
+export const getCalendarEvents = async (): Promise<CalendarEvent[]> => {
+  const { data } = await api.get('/api/calendar/events');
+  return data;
+};
+
+// ---- Multiple Gmail accounts ----
+export const getGmailAccounts = async (): Promise<GmailAccounts> => {
+  const { data } = await api.get('/api/gmail/accounts');
+  return data;
+};
+
+export const addGmailAccount = async (label: string): Promise<{ authorization_url: string }> => {
+  const { data } = await api.post('/api/gmail/accounts/connect', { label });
+  return data;
+};
+
+export const selectGmailAccount = async (accountId: string): Promise<GmailAccounts> => {
+  const { data } = await api.put('/api/gmail/accounts/selected', { account_id: accountId });
+  return data;
+};
+
+export const renameGmailAccount = async (id: string, label: string): Promise<GmailAccount> => {
+  const { data } = await api.patch(`/api/gmail/accounts/${id}`, { label });
+  return data;
+};
+
+export const removeGmailAccount = async (id: string): Promise<void> => {
+  await api.delete(`/api/gmail/accounts/${id}`);
 };
