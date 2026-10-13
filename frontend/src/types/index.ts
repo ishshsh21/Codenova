@@ -1,21 +1,21 @@
-export type Priority = 'P0' | 'P1' | 'P2' | 'P3' | 'P4';
-export type Audience = 'MINE' | 'OTHER_CLASS' | 'GENERAL';
-
 export interface User {
   id: string;
   email: string;
   name: string;
+  timezone: string;
+  workday_start: string;
+  workday_end: string;
   default_scan_days: number;
   notify_scan_completion: boolean;
   vip_senders: string[];
   ignored_senders: string[];
-  my_classes: string[];
 }
 
 export interface GmailStatus {
   connected: boolean;
   google_account_email?: string;
   last_synced_at?: string;
+  watch_active: boolean;
 }
 
 export interface ScanRun {
@@ -34,17 +34,23 @@ export interface ScanRun {
   progress_total: number;
   error_message?: string | null;
   created_at: string;
+  started_at?: string | null;
   completed_at?: string | null;
 }
 
 export interface ScanStart {
   id: string;
   status: string;
+  start_date?: string | null;
+  end_date?: string | null;
+  gmail_query: string;
   created_at: string;
 }
 
 export interface Notification {
   id: string;
+  scan_id?: string | null;
+  kind: string;
   title: string;
   message: string;
   is_read: boolean;
@@ -60,13 +66,14 @@ export interface DataSummary {
   gmail_scopes: string[];
 }
 
-export interface ScanRange {
+export interface SyncRequest {
   start_date?: string; // YYYY-MM-DD
   end_date?: string;   // YYYY-MM-DD
 }
 
 export interface TaskSource {
   message_id: string;
+  gmail_thread_id: string;
   internal_date?: string | null;
   gmail_url: string;
   subject: string;
@@ -76,69 +83,86 @@ export interface TaskSource {
   relationship_type: string;
 }
 
+export type Priority = 'P0' | 'P1' | 'P2' | 'P3' | 'P4';
+
 export interface Task {
   id: string;
   title: string;
   description: string;
   status: string;
   priority: Priority;
+  priority_score: number;
   priority_reasons: string[];
+  action_type: string;
   deadline?: string | null;
   deadline_raw?: string | null;
   deadline_confidence: number;
-  owner_label: string;
   owner_type: string;
+  owner_label: string;
+  project?: string | null;
+  project_confidence: number;
   estimated_effort_minutes: number;
+  confidence: number;
   is_blocking: boolean;
   notes: string;
   snoozed_until?: string | null;
-  audience: Audience;
+  depends_on: string[];
   sources: TaskSource[];
+  created_at: string;
+  updated_at: string;
 }
 
-export interface TaskCard {
+export interface AgendaTask {
   id: string;
   title: string;
-  priority: Priority;
+  priority: string;
+  priority_score: number;
   deadline?: string | null;
   estimated_effort_minutes: number;
   blocking: boolean;
   reason: string[];
+  scheduled_time?: string | null;
+  source_thread_id?: string | null;
 }
 
-export interface NowView {
+export interface DailyAgenda {
   date: string;
-  overdue: TaskCard[];
-  due_today: TaskCard[];
-  up_next: TaskCard[];
-  open_count: number;
-  fyi_count: number;
-  planned_minutes_today: number;
+  summary: {
+    actionable: number;
+    critical: number;
+    due_today: number;
+    overdue: number;
+    this_week: number;
+  };
+  task_ids: {
+    due_today: string[];
+    overdue: string[];
+    this_week: string[];
+  };
+  timeline: AgendaTask[];
+  no_action_count: number;
 }
 
-export interface PlannerView {
+export interface WeeklyAgenda {
   week_start: string;
   week_end: string;
-  days: Record<string, TaskCard[]>;
-  undated: TaskCard[];
+  days: Record<string, AgendaTask[]>;
+  later: AgendaTask[];
 }
 
-export type FyiGroup = 'OTHER_CLASS' | 'NEWSLETTER' | 'NOTICE' | 'AUTOMATED';
-
-export interface FyiItem {
-  id: string;
-  group: FyiGroup;
-  subject: string;
-  sender_name: string;
-  sender_email: string;
-  snippet: string;
-  internal_date?: string | null;
-  gmail_url: string;
-  audience_label: string;
-  reason: string;
+export interface FollowUpAlert {
+  task_id: string;
+  title: string;
+  message: string;
+  hours_remaining: number;
 }
 
 export interface AssistantMessage {
   role: 'user' | 'assistant';
   content: string;
+}
+
+export interface AssistantChatResponse {
+  message: string;
+  action_taken?: string | null;
 }
